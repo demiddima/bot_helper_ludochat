@@ -1,0 +1,12 @@
+{
+    "sell_account": {
+        "text": "Приветствуем, {username}. Ответы на все ваши вопросы [содержатся здесь](https://example.com)",
+        "private": false,
+        "autodelete": true
+    },
+    "quit_gambling": {
+        "text": "Всего существует 3 способа ...",
+        "private": false,
+        "autodelete": false
+    }
+}
