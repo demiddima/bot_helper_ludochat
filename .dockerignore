@@ -3,6 +3,5 @@ __pycache__/
 *.pyc
 venv/
 storage.sqlite
-data.db
 config.py
 config_old.py
