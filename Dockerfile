@@ -9,6 +9,7 @@ RUN apt-get update \
          default-libmysqlclient-dev \
          libssl-dev \
          libffi-dev \
+         python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
