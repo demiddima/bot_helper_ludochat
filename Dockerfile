@@ -31,8 +31,7 @@ RUN pip install --upgrade pip \
 # 5) Копируем весь исходный код приложения
 #    (в том числе config.py, main.py, папки handlers/ и services/)
 COPY . .
-
+EXPOSE 8080
 # 6) По умолчанию выполняем команду запуска бота:
 #    «-u» отключает буферизацию stdout/stderr, чтобы логи сразу шли в консоль
 CMD ["python", "-u", "main.py"]
-EXPOSE 8080
