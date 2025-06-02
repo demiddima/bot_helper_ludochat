@@ -1,27 +1,56 @@
-# main.py
+import os
+import sys
 import asyncio
 import logging
+
 from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from config import BOT_TOKEN, ADMIN_CHAT_IDS
-from storage import init_db_pool
+
+from config import (
+    BOT_TOKEN, PUBLIC_CHAT_ID, LOG_CHANNEL_ID,
+    ERROR_LOG_CHANNEL_ID, ADMIN_CHAT_IDS, PRIVATE_DESTINATIONS
+)
 from handlers.join import router as join_router
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.INFO)
 
 async def main():
-    await init_db_pool()
-    bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.MARKDOWN)
+    # 1) Инициализация бота
+    bot = Bot(
+        token=BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN)
+    )
     dp = Dispatcher()
+
+    # Регистрируем роутеры
     dp.include_router(join_router)
-    for chat_id in ADMIN_CHAT_IDS:
-        try:
-            logging.info(f"⚙️ Команды для админов чата {chat_id} установлены.")
-        except Exception as e:
-            logging.warning(f"[COMMANDS] Не удалось установить команды для {chat_id}: {e}")
-    await bot.delete_webhook(drop_pending_updates=True)
-    logging.info("Start polling")
-    await dp.start_polling(bot)
+
+    # 2) Запускаем polling Telegram в фоне
+    polling_task = asyncio.create_task(dp.start_polling(bot))
+
+    # 3) Поднимаем HTTP-сервер для health-check
+    from aiohttp import web
+
+    async def handle_health(request):
+        return web.Response(text="OK")
+
+    app = web.Application()
+    app.router.add_get('/', handle_health)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', 8080)
+    await site.start()
+
+    logging.info("HTTP server started on port 8080")
+
+    # 4) Ожидаем, пока polling_task не завершится
+    await polling_task
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logging.info("Bot stopped")
+        sys.exit(0)
