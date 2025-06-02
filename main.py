@@ -11,6 +11,7 @@ from config import (
     BOT_TOKEN, PUBLIC_CHAT_ID, LOG_CHANNEL_ID,
     ERROR_LOG_CHANNEL_ID, ADMIN_CHAT_IDS, PRIVATE_DESTINATIONS
 )
+from storage import init_db_pool
 from handlers.join import router as join_router
 
 logging.basicConfig(level=logging.INFO)
@@ -19,6 +20,14 @@ logger = logging.getLogger(__name__)
 async def main():
     logger.info("Starting bot and HTTP server")
 
+    # Инициализируем пул соединений к базе перед всеми операциями с БД
+    try:
+        await init_db_pool()
+        logger.info("Database pool initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize DB pool: {e}")
+        sys.exit(1)
+
     # 1) Инициализация бота
     bot = Bot(
         token=BOT_TOKEN,
@@ -26,7 +35,7 @@ async def main():
     )
     dp = Dispatcher()
 
-    # Регистрируем роутеры
+    # Регистрируем роутер для join
     dp.include_router(join_router)
 
     # 2) Запускаем polling Telegram в фоне
