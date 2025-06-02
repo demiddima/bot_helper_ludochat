@@ -1,10 +1,10 @@
-\
 # handlers/join.py
 import logging
 import re
 from aiogram import Router, F
 from aiogram.types import ChatJoinRequest, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
 
@@ -12,7 +12,8 @@ from config import BOT_TOKEN, PUBLIC_CHAT_ID, LOG_CHANNEL_ID, ERROR_LOG_CHANNEL_
 from storage import add_user, verify_user
 
 router = Router()
-bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.MARKDOWN)
+# Initialize Bot with DefaultBotProperties(parse_mode)
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
 join_requests: dict[int, ChatJoinRequest] = {}
 
 def escape_markdown(text: str) -> str:

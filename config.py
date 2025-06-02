@@ -1,6 +1,10 @@
 import os
 import sys
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
+
 def get_env_int(key):
     val = os.getenv(key)
     if val is None:
@@ -10,7 +14,6 @@ def get_env_int(key):
     except ValueError:
         raise ValueError(f"Environment variable {key} must be an integer, got: {val}")
 
-# Mandatory environment variables
 try:
     BOT_TOKEN = os.environ["BOT_TOKEN"]
     PUBLIC_CHAT_ID = get_env_int("PUBLIC_CHAT_ID")
@@ -28,7 +31,6 @@ try:
     DB_PASSWORD = os.environ["DB_PASSWORD"]
     DB_NAME = os.environ["DB_NAME"]
 
-    # Optional PRIVATE_DESTINATIONS as "title:chat_id:description;title2:chat_id2:description2"
     raw_private = os.getenv("PRIVATE_DESTINATIONS", "")
     if raw_private:
         PRIVATE_DESTINATIONS = []
