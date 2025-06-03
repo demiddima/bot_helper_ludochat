@@ -1,12 +1,12 @@
 {
-    "sell_account": {
-        "text": "Приветствуем, {username}. Ответы на все ваши вопросы [содержатся здесь](https://example.com)",
-        "private": false,
-        "autodelete": true
-    },
-    "quit_gambling": {
-        "text": "Всего существует 3 способа ...",
-        "private": false,
-        "autodelete": false
-    }
+  "sell_account": {
+    "text": "Чтобы продать аккаунт БК, используйте платформу по [ссылке](https://example.com/sell_account).",
+    "private": false,
+    "autodelete": true
+  },
+  "quit_gambling": {
+    "text": "Чтобы начать путь к выздоровлению, присоединяйтесь к каналам поддержки: https://t.me/ludoochat_support.",
+    "private": false,
+    "autodelete": false
+  }
 }
