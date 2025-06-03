@@ -32,7 +32,7 @@ async def handle_join(update: ChatJoinRequest):
             user.id,
             TERMS_MESSAGE,
             reply_markup=kb,
-            parse_mode="Markdown",
+            parse_mode="HTML",
             disable_web_page_preview=True
         )
         logging.info(f"[SEND] Условия отправлены пользователю {user.id}")
@@ -44,7 +44,7 @@ async def handle_join(update: ChatJoinRequest):
         )
         logging.warning(f"[FAIL] {msg}")
         try:
-            await bot.send_message(ERROR_LOG_CHANNEL_ID, msg, parse_mode="Markdown")
+            await bot.send_message(ERROR_LOG_CHANNEL_ID, msg, parse_mode="HTML")
         except Exception as log_e:
             logging.error(f"[FAIL] Не удалось отправить лог: {log_e}")
 
@@ -58,7 +58,7 @@ async def process_start(message: Message):
             return
 
         if message.from_user.id == uid and uid in join_requests:
-            request = join_requests.pop(uid)
+            join_requests.pop(uid)
 
             try:
                 await bot.approve_chat_join_request(PUBLIC_CHAT_ID, uid)
@@ -69,7 +69,7 @@ async def process_start(message: Message):
                 )
                 logging.warning(f"[FAIL] {log_msg}")
                 try:
-                    await bot.send_message(ERROR_LOG_CHANNEL_ID, log_msg, parse_mode="Markdown")
+                    await bot.send_message(ERROR_LOG_CHANNEL_ID, log_msg, parse_mode="HTML")
                 except Exception as log_e:
                     logging.error(f"[FAIL] Не удалось отправить лог: {log_e}")
 
@@ -80,26 +80,24 @@ async def process_start(message: Message):
                 log_msg = f"Ошибка добавления в БД {uid}: {escape_markdown(str(e))}"
                 logging.error(f"[DB ERROR] {log_msg}")
                 try:
-                    await bot.send_message(ERROR_LOG_CHANNEL_ID, log_msg, parse_mode="Markdown")
+                    await bot.send_message(ERROR_LOG_CHANNEL_ID, log_msg, parse_mode="HTML")
                 except Exception as log_e:
                     logging.error(f"[FAIL] Не удалось отправить лог: {log_e}")
 
             # Generate and send initial links message
             await send_links_message(uid)
-
         else:
             await message.reply(
                 "❗ Неверная команда. Чтобы пройти верификацию, нажмите «Вступить» в публичном чате и "
                 "используйте полученную кнопку «✅ Я согласен(а) и ознакомлен(а) со всем».",
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
     else:
-        # If just /start without joining, include static link to public chat ludoochat
         public_chat_url = "https://t.me/ludoochat"
         await message.reply(
             f"Привет! Чтобы пройти верификацию, перейдите в публичный чат по ссылке {public_chat_url} и нажмите «Вступить». "
             "Там вы получите кнопку «✅ Я согласен(а) и ознакомлен(а) со всем».",
-            parse_mode="Markdown"
+            parse_mode="HTML"
         )
 
 async def send_links_message(uid: int):
@@ -121,7 +119,7 @@ async def send_links_message(uid: int):
                 log_msg = f"Ошибка обновления invite_link {uid}: {escape_markdown(str(e))}"
                 logging.error(f"[DB ERROR] {log_msg}")
                 try:
-                    await bot.send_message(ERROR_LOG_CHANNEL_ID, log_msg, parse_mode="Markdown")
+                    await bot.send_message(ERROR_LOG_CHANNEL_ID, log_msg, parse_mode="HTML")
                 except Exception as log_e:
                     logging.error(f"[FAIL] Не удалось отправить лог: {log_e}")
 
@@ -130,7 +128,7 @@ async def send_links_message(uid: int):
             log_msg = f"Не удалось создать invite link для {uid} в чате {dest['chat_id']}: {escape_markdown(str(e))}"
             logging.warning(f"[FAIL] {log_msg}")
             try:
-                await bot.send_message(ERROR_LOG_CHANNEL_ID, log_msg, parse_mode="Markdown")
+                await bot.send_message(ERROR_LOG_CHANNEL_ID, log_msg, parse_mode="HTML")
             except Exception as log_e:
                 logging.error(f"[FAIL] Не удалось отправить лог: {log_e}")
 
@@ -138,7 +136,11 @@ async def send_links_message(uid: int):
     buttons = [[InlineKeyboardButton(text="Обновить ссылки", callback_data=f"refresh_{uid}")]]
     text = get_invite_links_text(links)
     markup = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await bot.send_message(uid, text, reply_markup=markup, parse_mode="HTML", disable_web_page_preview=True)
+    try:
+        await bot.send_message(uid, text, reply_markup=markup, parse_mode="HTML", disable_web_page_preview=True)
+        logging.info(f"[SEND LINKS] Ссылки отправлены пользователю {uid}")
+    except Exception as e:
+        logging.error(f"[FAIL SEND LINKS] {e}")
 
 @router.callback_query(F.data.startswith("refresh_"))
 async def refresh_links(query: CallbackQuery):
@@ -177,6 +179,9 @@ async def refresh_links(query: CallbackQuery):
     buttons = [[InlineKeyboardButton(text="Обновить ссылки", callback_data=f"refresh_{uid}")]]
     new_text = get_invite_links_text(links)
     new_markup = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await query.message.edit_text(new_text, reply_markup=new_markup, parse_mode="HTML", disable_web_page_preview=True)
-    await query.answer("Ссылки обновлены.")
-
+    try:
+        await query.message.edit_text(new_text, reply_markup=new_markup, parse_mode="HTML", disable_web_page_preview=True)
+        await query.answer("Ссылки обновлены.")
+        logging.info(f"[REFRESH LINKS] Ссылки обновлены для пользователя {uid}")
+    except Exception as e:
+        logging.error(f"[FAIL REFRESH] {e}")
