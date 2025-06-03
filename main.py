@@ -2,8 +2,10 @@ import os
 import sys
 import asyncio
 import logging
+import re
 
 from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import Message
 
@@ -23,12 +25,12 @@ PUBLIC_CHAT_ID = int(os.getenv("PUBLIC_CHAT_ID", "0"))
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
 ERROR_LOG_CHANNEL_ID = int(os.getenv("ERROR_LOG_CHANNEL_ID", "0"))
 
-# Parse comma-separated list of admin IDs into a Python list of ints
+# Parse comma or semicolon-separated list of admin IDs into a Python list of ints
 ADMIN_CHAT_IDS_RAW = os.getenv("ADMIN_CHAT_IDS", "")
 if not ADMIN_CHAT_IDS_RAW:
     ADMIN_CHAT_IDS = []
 else:
-    ADMIN_CHAT_IDS = [int(x.strip()) for x in ADMIN_CHAT_IDS_RAW.split(",") if x.strip()]
+    ADMIN_CHAT_IDS = [int(x.strip()) for x in re.split(r"[,;]", ADMIN_CHAT_IDS_RAW) if x.strip()]
 
 # PRIVATE_DESTINATIONS: split "Title:id:Desc" items by comma, then by colon
 PRIVATE_DESTINATIONS_RAW = os.getenv("PRIVATE_DESTINATIONS", "")
@@ -47,10 +49,9 @@ if PRIVATE_DESTINATIONS_RAW:
 else:
     PRIVATE_DESTINATIONS = []
 
-
 async def main():
-    # 1) Инициализация бота (убираем DefaultBotProperties, передаём parse_mode напрямую)
-    bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.MARKDOWN)
+    # 1) Инициализация бота с DefaultBotProperties
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
     dp = Dispatcher()
 
     # 2) Инициализация connection pool к БД
@@ -61,7 +62,6 @@ async def main():
 
     # 4) Запускаем aiohttp-сервер параллельно с polling
     app = web.Application()
-    # Пример простого health-check-эндпоинта:
     async def health(request):
         return web.Response(text="OK")
     app.router.add_get("/", health)
@@ -75,7 +75,6 @@ async def main():
     # 5) Запуск polling
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
-
 
 if __name__ == "__main__":
     try:
