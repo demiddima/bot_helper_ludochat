@@ -4,20 +4,19 @@ from aiogram import Router, F
 from aiogram.types import ChatJoinRequest, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.enums import ParseMode
 from aiogram import Bot
-from aiogram.client.default import DefaultBotProperties
 from aiogram.exceptions import TelegramForbiddenError
 
 from config import BOT_TOKEN, PUBLIC_CHAT_ID, LOG_CHANNEL_ID, ERROR_LOG_CHANNEL_ID, PRIVATE_DESTINATIONS
 from storage import add_user, verify_user
 
 router = Router()
-# Initialize Bot with DefaultBotProperties(parse_mode)
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
+# Initialize Bot without DefaultBotProperties
+bot = Bot(token=BOT_TOKEN)
 join_requests: dict[int, ChatJoinRequest] = {}
 
 def escape_markdown(text: str) -> str:
-    # Экранируем специальные символы Markdown, чтобы избежать ошибок парсинга.
-    return re.sub(r'([_*[\\]()~`>#+\\-=|{}.!])', r'\\\1', text or "")
+    # Escape special Markdown characters
+    return re.sub(r'([_*[\]()~`>#+\-=|{}.!])', r'\', text or "")
 
 @router.chat_join_request(F.chat.id == PUBLIC_CHAT_ID)
 async def handle_join(update: ChatJoinRequest):
@@ -45,12 +44,11 @@ async def handle_join(update: ChatJoinRequest):
     ]])
 
     try:
-        await bot.send_message(user.id, text, reply_markup=kb)
+        await bot.send_message(user.id, text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
         logging.info(f"[SEND] Условия отправлены пользователю {user.id}")
     except TelegramForbiddenError as e:
-        # Логируем и посылаем уведомление в ERROR_LOG_CHANNEL_ID
         msg = (
-            f"Не удалось отправить ЛС с условиями пользователю "
+            f"Не удалось отправить ЛС пользователю "
             f"{escape_markdown(user.full_name)} (@{escape_markdown(user.username or '')}, ID: `{user.id}`): "
             f"{escape_markdown(str(e))}"
         )
@@ -58,7 +56,7 @@ async def handle_join(update: ChatJoinRequest):
         try:
             await bot.send_message(ERROR_LOG_CHANNEL_ID, msg, parse_mode=ParseMode.MARKDOWN)
         except Exception as log_e:
-            logging.error(f"[FAIL] Не удалось отправить лог в канал ошибок: {log_e}")
+            logging.error(f"[FAIL] Не удалось отправить лог: {log_e}")
 
 @router.message(F.text.startswith("/start"))
 async def process_start(message: Message):
@@ -72,30 +70,29 @@ async def process_start(message: Message):
         if message.from_user.id == uid and uid in join_requests:
             request = join_requests.pop(uid)
 
-            # Одобряем заявку
             try:
                 await bot.approve_chat_join_request(PUBLIC_CHAT_ID, uid)
                 logging.info(f"[APPROVE] Заявка пользователя {uid} одобрена")
             except TelegramForbiddenError as e:
                 log_msg = (
-                    f"Не удалось одобрить заявку пользователя {uid}: {escape_markdown(str(e))}"
+                    f"Не удалось одобрить заявку {uid}: {escape_markdown(str(e))}"
                 )
                 logging.warning(f"[FAIL] {log_msg}")
                 try:
                     await bot.send_message(ERROR_LOG_CHANNEL_ID, log_msg, parse_mode=ParseMode.MARKDOWN)
                 except Exception as log_e:
-                    logging.error(f"[FAIL] Не удалось отправить лог в канал ошибок: {log_e}")
+                    logging.error(f"[FAIL] Не удалось отправить лог: {log_e}")
 
             user = message.from_user
             try:
                 await add_user(uid, user.username, user.full_name)
             except Exception as e:
-                log_msg = f"Ошибка добавления пользователя в БД {uid}: {escape_markdown(str(e))}"
+                log_msg = f"Ошибка добавления в БД {uid}: {escape_markdown(str(e))}"
                 logging.error(f"[DB ERROR] {log_msg}")
                 try:
                     await bot.send_message(ERROR_LOG_CHANNEL_ID, log_msg, parse_mode=ParseMode.MARKDOWN)
                 except Exception as log_e:
-                    logging.error(f"[FAIL] Не удалось отправить лог в канал ошибок: {log_e}")
+                    logging.error(f"[FAIL] Не удалось отправить лог: {log_e}")
 
             links = []
             buttons = []
@@ -113,12 +110,12 @@ async def process_start(message: Message):
                     try:
                         await verify_user(uid, invite.invite_link)
                     except Exception as e:
-                        log_msg = f"Ошибка обновления invite_link для {uid}: {escape_markdown(str(e))}"
+                        log_msg = f"Ошибка обновления invite_link {uid}: {escape_markdown(str(e))}"
                         logging.error(f"[DB ERROR] {log_msg}")
                         try:
                             await bot.send_message(ERROR_LOG_CHANNEL_ID, log_msg, parse_mode=ParseMode.MARKDOWN)
                         except Exception as log_e:
-                            logging.error(f"[FAIL] Не удалось отправить лог в канал ошибок: {log_e}")
+                            logging.error(f"[FAIL] Не удалось отправить лог: {log_e}")
 
                     links.append((dest["title"], invite.invite_link, dest["description"]))
                     buttons.append([InlineKeyboardButton(text=dest["title"], url=invite.invite_link)])
@@ -128,7 +125,7 @@ async def process_start(message: Message):
                     try:
                         await bot.send_message(ERROR_LOG_CHANNEL_ID, log_msg, parse_mode=ParseMode.MARKDOWN)
                     except Exception as log_e:
-                        logging.error(f"[FAIL] Не удалось отправить лог в канал ошибок: {log_e}")
+                        logging.error(f"[FAIL] Не удалось отправить лог: {log_e}")
 
             test_link = links[0][1] if links else ""
             text2 = (
@@ -156,16 +153,14 @@ async def process_start(message: Message):
                     parse_mode=ParseMode.MARKDOWN
                 )
                 logging.info(f"[SEND] Ссылки отправлены пользователю {uid}")
-                sent = True
             except TelegramForbiddenError as e:
                 log_msg = f"Не удалось отправить ссылки {uid}: {escape_markdown(str(e))}"
                 logging.warning(f"[FAIL] {log_msg}")
                 try:
                     await bot.send_message(ERROR_LOG_CHANNEL_ID, log_msg, parse_mode=ParseMode.MARKDOWN)
                 except Exception as log_e:
-                    logging.error(f"[FAIL] Не удалось отправить лог в канал ошибок: {log_e}")
+                    logging.error(f"[FAIL] Не удалось отправить лог: {log_e}")
 
-            # Логируем факт успешной верификации
             log_text = (
                 f"👤 <b>{escape_markdown(user.full_name)}</b> (@{escape_markdown(user.username or '')})\n"
                 f"🆔 <code>{user.id}</code>\n"
@@ -175,7 +170,6 @@ async def process_start(message: Message):
                 log_text += f"— <b>{escape_markdown(title)}</b>: {invite_link}\n"
 
             try:
-                # Используем HTML, чтобы не опасаться Markdown-ошибок
                 await bot.send_message(LOG_CHANNEL_ID, log_text, parse_mode="HTML")
                 logging.info(f"[LOG] Лог отправлен в канал {LOG_CHANNEL_ID}")
             except Exception as e:
@@ -184,7 +178,7 @@ async def process_start(message: Message):
                 try:
                     await bot.send_message(ERROR_LOG_CHANNEL_ID, log_msg, parse_mode=ParseMode.MARKDOWN)
                 except Exception as log_e:
-                    logging.error(f"[FAIL] Не удалось отправить лог в канал ошибок: {log_e}")
+                    logging.error(f"[FAIL] Не удалось отправить лог: {log_e}")
         else:
             await message.reply(
                 "❗ Неверная команда. Чтобы пройти верификацию, нажмите «Вступить» в публичном чате и "
@@ -193,4 +187,4 @@ async def process_start(message: Message):
     else:
         await message.reply(
             "Привет! Чтобы пройти верификацию, нажмите «Вступить» в публичном чате. "
-            "Там вы получите кнопку «✅ Я согласен(а) и ознакомлен(а) со всем».")
+                "Там вы получите кнопку «✅ Я согласен(а) и ознакомлен(а) со всем».")

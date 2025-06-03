@@ -5,7 +5,6 @@ import logging
 import re
 
 from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import Message
 
@@ -19,20 +18,20 @@ import services.invite_service as invite_service  # noqa: F401
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-load_dotenv()  # подгружаем переменные из .env
+load_dotenv()  # Load variables from .env
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 PUBLIC_CHAT_ID = int(os.getenv("PUBLIC_CHAT_ID", "0"))
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
 ERROR_LOG_CHANNEL_ID = int(os.getenv("ERROR_LOG_CHANNEL_ID", "0"))
 
-# Parse comma or semicolon-separated list of admin IDs into a Python list of ints
+# Parse comma or semicolon-separated list of admin IDs into a list of ints
 ADMIN_CHAT_IDS_RAW = os.getenv("ADMIN_CHAT_IDS", "")
 if not ADMIN_CHAT_IDS_RAW:
     ADMIN_CHAT_IDS = []
 else:
     ADMIN_CHAT_IDS = [int(x.strip()) for x in re.split(r"[,;]", ADMIN_CHAT_IDS_RAW) if x.strip()]
 
-# PRIVATE_DESTINATIONS: split "Title:id:Desc" items by comma, then by colon
+# PRIVATE_DESTINATIONS: split "Title:id:Desc" items by comma, then colon
 PRIVATE_DESTINATIONS_RAW = os.getenv("PRIVATE_DESTINATIONS", "")
 if PRIVATE_DESTINATIONS_RAW:
     PRIVATE_DESTINATIONS = []
@@ -50,17 +49,17 @@ else:
     PRIVATE_DESTINATIONS = []
 
 async def main():
-    # 1) Инициализация бота с DefaultBotProperties
-    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
+    # 1) Initialize bot without DefaultBotProperties
+    bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
 
-    # 2) Инициализация connection pool к БД
+    # 2) Initialize DB pool
     await init_db_pool()
 
-    # 3) Регистрируем роутеры (join, команды и т. д.)
+    # 3) Register routers (join, commands, etc.)
     dp.include_router(join_router)
 
-    # 4) Запускаем aiohttp-сервер параллельно с polling
+    # 4) Start aiohttp server alongside polling
     app = web.Application()
     async def health(request):
         return web.Response(text="OK")
@@ -71,8 +70,9 @@ async def main():
     port = int(os.getenv("PORT", "8080"))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
+    logger.info(f"HTTP health-check server started on port {port}")
 
-    # 5) Запуск polling
+    # 5) Start polling
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
