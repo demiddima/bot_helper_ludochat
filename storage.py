@@ -1,4 +1,3 @@
-# storage.py
 import logging
 import aiomysql
 from aiomysql import Pool
@@ -8,6 +7,9 @@ from config import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 pool: Optional[Pool] = None
 
 async def init_db_pool() -> None:
+    """
+    Инициализируем пул подключений и создаём таблицы chats и user_memberships.
+    """
     global pool
     if pool is not None:
         return
@@ -26,58 +28,111 @@ async def init_db_pool() -> None:
     except Exception as e:
         logging.critical(f"[DB] Ошибка при создании пула: {e}")
         raise
+    # Сразу создаём (или проверяем) нужные таблицы
     await init_tables()
 
 async def init_tables() -> None:
+    """
+    Создаёт таблицы chats и user_memberships, если их ещё нет.
+    """
     if pool is None:
         raise RuntimeError("init_db_pool() должно быть вызвано перед init_tables()")
-    create_sql = """
-    CREATE TABLE IF NOT EXISTS users (
+
+    # 1) Таблица chats
+    create_chats_sql = """
+    CREATE TABLE IF NOT EXISTS chats (
         id BIGINT PRIMARY KEY,
-        username VARCHAR(255),
-        full_name VARCHAR(255),
-        invite_link TEXT,
-        is_verified TINYINT DEFAULT 0
+        title VARCHAR(256) NOT NULL,
+        type ENUM('public_channel','supergroup','group','private_channel') NOT NULL,
+        added_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    """
+    # 2) Таблица user_memberships
+    create_memberships_sql = """
+    CREATE TABLE IF NOT EXISTS user_memberships (
+        user_id BIGINT NOT NULL,
+        chat_id BIGINT NOT NULL,
+        joined_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, chat_id),
+        FOREIGN KEY (chat_id)
+          REFERENCES chats(id) ON DELETE CASCADE
     ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     """
     try:
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
-                await cur.execute(create_sql)
-                logging.info("[DB] Таблица users создана/проверена")
+                await cur.execute(create_chats_sql)
+                logging.info("[DB] Таблица chats создана/проверена")
+                await cur.execute(create_memberships_sql)
+                logging.info("[DB] Таблица user_memberships создана/проверена")
     except Exception as e:
-        logging.error(f"[DB] Ошибка при создании таблицы users: {e}")
+        logging.error(f"[DB] Ошибка при создании таблиц: {e}")
 
-async def add_user(uid: int, username: str | None, full_name: str | None) -> None:
+async def upsert_chat(chat_id: int, title: str, type_: str) -> None:
+    """
+    Вставляет (или обновляет) запись о чате (канал/группа),
+    где бот стал админом.
+    """
     if pool is None:
-        raise RuntimeError("init_db_pool() должно быть вызвано перед add_user()")
+        raise RuntimeError("init_db_pool() должно быть вызвано перед upsert_chat()")
     sql = """
-    INSERT INTO users (id, username, full_name, invite_link, is_verified)
-    VALUES (%s, %s, %s, NULL, 0) AS newuser
-    ON DUPLICATE KEY UPDATE
-        username = newuser.username,
-        full_name = newuser.full_name;
+    INSERT INTO chats (id, title, type)
+    VALUES (%s, %s, %s)
+    ON DUPLICATE KEY UPDATE title = %s;
     """
     try:
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
-                await cur.execute(sql, (uid, username or "", full_name or ""))
-                logging.info(f"[DB] Пользователь {uid} добавлен/обновлён (is_verified=0)")
+                await cur.execute(sql, (chat_id, title, type_, title))
+                logging.info(f"[DB] Чат {chat_id} ({title}) сохранён/обновлён")
     except Exception as e:
-        logging.error(f"[DB] Ошибка add_user({uid}): {e}")
+        logging.error(f"[DB] Ошибка upsert_chat({chat_id}): {e}")
 
-async def verify_user(uid: int, invite_link: str) -> None:
+async def delete_chat(chat_id: int) -> None:
+    """
+    Удаляет чат, когда бот был удалён из него.
+    """
     if pool is None:
-        raise RuntimeError("init_db_pool() должно быть вызвано перед verify_user()")
+        raise RuntimeError("init_db_pool() должно быть вызвано перед delete_chat()")
+    sql = "DELETE FROM chats WHERE id = %s;"
+    try:
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(sql, (chat_id,))
+                logging.info(f"[DB] Чат {chat_id} удалён из списка")
+    except Exception as e:
+        logging.error(f"[DB] Ошибка delete_chat({chat_id}): {e}")
+
+async def add_user_to_chat(user_id: int, chat_id: int) -> None:
+    """
+    Добавляет (или обновляет) факт состоятия пользователя в чате.
+    """
+    if pool is None:
+        raise RuntimeError("init_db_pool() должно быть вызвано перед add_user_to_chat()")
     sql = """
-    UPDATE users
-       SET invite_link = %s, is_verified = 1
-     WHERE id = %s;
+    INSERT INTO user_memberships (user_id, chat_id)
+    VALUES (%s, %s)
+    ON DUPLICATE KEY UPDATE joined_at = CURRENT_TIMESTAMP;
     """
     try:
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
-                await cur.execute(sql, (invite_link, uid))
-                logging.info(f"[DB] Пользователь {uid} отмечен как verified, invite_link сохранён")
+                await cur.execute(sql, (user_id, chat_id))
+                logging.info(f"[DB] Пользователь {user_id} добавлен в чат {chat_id}")
     except Exception as e:
-        logging.error(f"[DB] Ошибка verify_user({uid}): {e}")
+        logging.error(f"[DB] Ошибка add_user_to_chat({user_id}, {chat_id}): {e}")
+
+async def remove_user_from_chat(user_id: int, chat_id: int) -> None:
+    """
+    Удаляет факт членства пользователя в чате, когда он выходит или кикнут.
+    """
+    if pool is None:
+        raise RuntimeError("init_db_pool() должно быть вызвано перед remove_user_from_chat()")
+    sql = "DELETE FROM user_memberships WHERE user_id = %s AND chat_id = %s;"
+    try:
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(sql, (user_id, chat_id))
+                logging.info(f"[DB] Пользователь {user_id} удалён из чата {chat_id}")
+    except Exception as e:
+        logging.error(f"[DB] Ошибка remove_user_from_chat({user_id}, {chat_id}): {e}")
