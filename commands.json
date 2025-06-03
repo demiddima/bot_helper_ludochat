@@ -1,11 +1,11 @@
 {
   "sell_account": {
-    "text": "Чтобы продать аккаунт БК, используйте платформу по [ссылке](https://example.com/sell_account).",
+    "text": "Чтобы продать аккаунт БК, используйте платформу по <a href=\"https://example.com/sell_account\">ссылке</a>.",
     "private": false,
     "autodelete": true
   },
   "quit_gambling": {
-    "text": "Чтобы начать путь к выздоровлению, присоединяйтесь к каналам поддержки: https://t.me/ludoochat_support.",
+    "text": "Чтобы начать путь к выздоровлению, присоединяйтесь к <a href=\"https://t.me/ludoochat_support\">каналу поддержки</a>.",
     "private": false,
     "autodelete": false
   }

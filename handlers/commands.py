@@ -6,7 +6,6 @@ import os
 from aiogram import Router, F
 from aiogram.types import Message
 from aiogram.filters.command import Command
-from aiogram.enums import ParseMode
 
 router = Router()
 
@@ -23,15 +22,14 @@ except Exception as e:
 @router.message(Command(commands=list(RESPONSES.keys())), F.reply_to_message)
 async def handle_slash_command(message: Message):
     """
-    Обрабатывает команды в ответ на сообщение, используя настройки из commands.json.
+    Обрабатывает команды /sell_account и /quit_gambling при ответе на сообщение.
+    Для sell_account: удаляет команду и далее обе через таймаут.
+    Для quit_gambling: не удаляет вопросы и ответы, просто отправляет ответ.
     """
     chat_id = message.chat.id
     user_id = message.from_user.id
 
-    text = message.text
-    # Extract command without bot suffix
-    command_name = text.lstrip("/").split("@")[0].lower()
-
+    command_name = message.text.lstrip("/").split("@")[0].lower()
     if command_name not in RESPONSES:
         logging.info(f"[UNKNOWN] Команда {command_name} не найдена.")
         return
@@ -45,6 +43,7 @@ async def handle_slash_command(message: Message):
     replied_msg = message.reply_to_message
     username_to_insert = f"@{replied_msg.from_user.username}" if replied_msg.from_user.username else replied_msg.from_user.full_name
 
+    # Delete the command message in both cases
     try:
         await message.delete()
         logging.info(f"[DELETE CMD] Команда /{command_name} удалена.")
@@ -53,57 +52,42 @@ async def handle_slash_command(message: Message):
 
     tpl = RESPONSES.get(command_name, {})
     text_template = tpl.get("text", "")
-    send_private = tpl.get("private", False)
     autodelete = tpl.get("autodelete", False)
 
     final_text = text_template.replace("{username}", username_to_insert)
 
     response_message = None
 
-    if send_private:
-        # Send response as private message
-        try:
-            await message.bot.send_message(replied_msg.from_user.id, final_text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
-            logging.info(f"[SENT PRIVATE] Ответ отправлен пользователю {username_to_insert}.")
-        except Exception as e:
-            logging.warning(f"[FAIL SEND PRIVATE] Не удалось отправить ответ в ЛС: {e}")
-        # Delete question immediately if autodelete
-        if autodelete:
+    # Send response in chat as reply using HTML parse mode
+    try:
+        response_message = await message.bot.send_message(
+            chat_id,
+            final_text,
+            reply_to_message_id=replied_msg.message_id,
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+        logging.info(f"[SENT CHAT] Ответ на команду /{command_name} отправлен.")
+    except Exception as e:
+        logging.warning(f"[FAIL SEND CHAT] Не удалось отправить ответ в чат: {e}")
+        return
+
+    # If sell_account, schedule deletion of question and answer
+    if command_name == "sell_account" and autodelete:
+        question_id = replied_msg.message_id
+        answer_id = response_message.message_id
+
+        async def delete_later():
+            await asyncio.sleep(120)
             try:
-                await message.bot.delete_message(chat_id, replied_msg.message_id)
-                logging.info(f"[DELETE Q] Удалён вопрос (message_id={replied_msg.message_id}).")
+                await message.bot.delete_message(chat_id, question_id)
+                logging.info(f"[DELETE Q] Удалён вопрос (message_id={question_id}).")
             except Exception:
                 pass
-    else:
-        # Send response in chat as reply
-        try:
-            response_message = await message.bot.send_message(
-                chat_id,
-                final_text,
-                reply_to_message_id=replied_msg.message_id,
-                parse_mode=ParseMode.MARKDOWN,
-                disable_web_page_preview=True
-            )
-            logging.info(f"[SENT CHAT] Ответ в чат (message_id={response_message.message_id}).")
-        except Exception as e:
-            logging.warning(f"[FAIL SEND CHAT] Не удалось отправить ответ в чат: {e}")
-            return
+            try:
+                await message.bot.delete_message(chat_id, answer_id)
+                logging.info(f"[DELETE A] Удалён ответ (message_id={answer_id}).")
+            except Exception:
+                pass
 
-        if autodelete:
-            question_id = replied_msg.message_id
-            answer_id = response_message.message_id
-
-            async def delete_later():
-                await asyncio.sleep(120)
-                try:
-                    await message.bot.delete_message(chat_id, question_id)
-                    logging.info(f"[DELETE Q] Удалён вопрос (message_id={question_id}).")
-                except Exception:
-                    pass
-                try:
-                    await message.bot.delete_message(chat_id, answer_id)
-                    logging.info(f"[DELETE A] Удалён ответ (message_id={answer_id}).")
-                except Exception:
-                    pass
-
-            asyncio.create_task(delete_later())
+        asyncio.create_task(delete_later())
