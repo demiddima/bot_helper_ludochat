@@ -23,7 +23,12 @@ try:
     ADMIN_CHAT_IDS_RAW = os.getenv("ADMIN_CHAT_IDS", "")
     if not ADMIN_CHAT_IDS_RAW:
         raise KeyError("ADMIN_CHAT_IDS is not set or is empty")
-    ADMIN_CHAT_IDS = [int(x) for x in ADMIN_CHAT_IDS_RAW.split(";") if x]
+    # Parse comma-separated list of admin IDs into a Python list of ints
+ADMIN_CHAT_IDS = [
+    int(x) for x in os.getenv("ADMIN_CHAT_IDS", "").split(",")
+    if x.strip()
+]
+
 
     DB_HOST = os.environ["DB_HOST"]
     DB_PORT = get_env_int("DB_PORT")
