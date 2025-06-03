@@ -5,66 +5,80 @@ import logging
 
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
+from aiogram.types import Message
 
-from config import (
-    BOT_TOKEN, PUBLIC_CHAT_ID, LOG_CHANNEL_ID,
-    ERROR_LOG_CHANNEL_ID, ADMIN_CHAT_IDS, PRIVATE_DESTINATIONS
-)
+from aiohttp import web
+from dotenv import load_dotenv
 from storage import init_db_pool
 from handlers.join import router as join_router
+import handlers.commands  # noqa: F401
+import services.invite_service as invite_service  # noqa: F401
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+load_dotenv()  # подгружаем переменные из .env
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+PUBLIC_CHAT_ID = int(os.getenv("PUBLIC_CHAT_ID", "0"))
+LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
+ERROR_LOG_CHANNEL_ID = int(os.getenv("ERROR_LOG_CHANNEL_ID", "0"))
+
+# Parse comma-separated list of admin IDs into a Python list of ints
+ADMIN_CHAT_IDS_RAW = os.getenv("ADMIN_CHAT_IDS", "")
+if not ADMIN_CHAT_IDS_RAW:
+    ADMIN_CHAT_IDS = []
+else:
+    ADMIN_CHAT_IDS = [int(x.strip()) for x in ADMIN_CHAT_IDS_RAW.split(",") if x.strip()]
+
+# PRIVATE_DESTINATIONS: split "Title:id:Desc" items by comma, then by colon
+PRIVATE_DESTINATIONS_RAW = os.getenv("PRIVATE_DESTINATIONS", "")
+if PRIVATE_DESTINATIONS_RAW:
+    PRIVATE_DESTINATIONS = []
+    for item in PRIVATE_DESTINATIONS_RAW.split(","):
+        parts = item.split(":", 2)
+        if len(parts) != 3:
+            continue
+        title, chat_id, description = parts
+        PRIVATE_DESTINATIONS.append({
+            "title": title,
+            "chat_id": int(chat_id),
+            "description": description
+        })
+else:
+    PRIVATE_DESTINATIONS = []
+
+
 async def main():
-    logger.info("Starting bot and HTTP server")
-
-    # Инициализируем пул соединений к базе перед всеми операциями с БД
-    try:
-        await init_db_pool()
-        logger.info("Database pool initialized")
-    except Exception as e:
-        logger.error(f"Failed to initialize DB pool: {e}")
-        sys.exit(1)
-
-    # 1) Инициализация бота
+    # 1) Инициализация бота (убираем DefaultBotProperties, передаём parse_mode напрямую)
     bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.MARKDOWN)
     dp = Dispatcher()
 
-    # Регистрируем роутер для join
+    # 2) Инициализация connection pool к БД
+    await init_db_pool()
+
+    # 3) Регистрируем роутеры (join, команды и т. д.)
     dp.include_router(join_router)
 
-    # 2) Запускаем polling Telegram в фоне
-    polling_task = asyncio.create_task(dp.start_polling(bot))
-    logger.info("Bot polling started")
-
-    # 3) Поднимаем HTTP-сервер для health-check
-    try:
-        from aiohttp import web
-    except ImportError:
-        logger.error("aiohttp пакет не установлен")
-        sys.exit(1)
-
-    async def handle_health(request):
-        return web.Response(text="OK")
-
+    # 4) Запускаем aiohttp-сервер параллельно с polling
     app = web.Application()
-    app.router.add_get('/', handle_health)
+    # Пример простого health-check-эндпоинта:
+    async def health(request):
+        return web.Response(text="OK")
+    app.router.add_get("/", health)
 
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.getenv("PORT", "8080"))
-    site = web.TCPSite(runner, '0.0.0.0', port)
+    site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
 
-    logger.info(f"HTTP server started on port {port}")
+    # 5) Запуск polling
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
 
-    # 4) Ожидаем, пока polling_task не завершится
-    await polling_task
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot stopped")
-        sys.exit(0)
+        logging.warning("Shutting down...")

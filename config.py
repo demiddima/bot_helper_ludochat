@@ -23,26 +23,14 @@ try:
     ADMIN_CHAT_IDS_RAW = os.getenv("ADMIN_CHAT_IDS", "")
     if not ADMIN_CHAT_IDS_RAW:
         raise KeyError("ADMIN_CHAT_IDS is not set or is empty")
-    # Parse comma-separated list of admin IDs into a Python list of ints
-ADMIN_CHAT_IDS = [
-    int(x) for x in os.getenv("ADMIN_CHAT_IDS", "").split(",")
-    if x.strip()
-]
+    # Split by comma now
+    ADMIN_CHAT_IDS = [int(x.strip()) for x in ADMIN_CHAT_IDS_RAW.split(",") if x.strip()]
 
-
-    DB_HOST = os.environ["DB_HOST"]
-    DB_PORT = get_env_int("DB_PORT")
-    DB_USER = os.environ["DB_USER"]
-    DB_PASSWORD = os.environ["DB_PASSWORD"]
-    DB_NAME = os.environ["DB_NAME"]
-
-    raw_private = os.getenv("PRIVATE_DESTINATIONS", "")
-    if raw_private:
+    PRIVATE_DESTINATIONS_RAW = os.getenv("PRIVATE_DESTINATIONS", "")
+    if PRIVATE_DESTINATIONS_RAW:
         PRIVATE_DESTINATIONS = []
-        for item in raw_private.split(";"):
-            if not item:
-                continue
-            parts = item.split(":")
+        for item in PRIVATE_DESTINATIONS_RAW.split(","):
+            parts = item.split(":", 2)
             if len(parts) != 3:
                 continue
             title, chat_id, description = parts
