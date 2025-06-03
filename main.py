@@ -28,10 +28,7 @@ async def main():
         sys.exit(1)
 
     # 1) Инициализация бота
-    bot = Bot(
-        token=BOT_TOKEN,
-        parse_mode=ParseMode.MARKDOWN
-    )
+    bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.MARKDOWN)
     dp = Dispatcher()
 
     # Регистрируем роутер для join
