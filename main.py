@@ -4,7 +4,6 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from config import (
@@ -31,7 +30,7 @@ async def main():
     # 1) Инициализация бота
     bot = Bot(
         token=BOT_TOKEN,
-        default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN)
+        parse_mode=ParseMode.MARKDOWN
     )
     dp = Dispatcher()
 
@@ -57,7 +56,7 @@ async def main():
 
     runner = web.AppRunner(app)
     await runner.setup()
-    port = int(os.getenv("PORT", "80"))
+    port = int(os.getenv("PORT", "8080"))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
 
