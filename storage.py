@@ -53,10 +53,10 @@ async def add_user(uid: int, username: str | None, full_name: str | None) -> Non
         raise RuntimeError("init_db_pool() должно быть вызвано перед add_user()")
     sql = """
     INSERT INTO users (id, username, full_name, invite_link, is_verified)
-    VALUES (%s, %s, %s, NULL, 0)
+    VALUES (%s, %s, %s, NULL, 0) AS newuser
     ON DUPLICATE KEY UPDATE
-        username = VALUES(username),
-        full_name = VALUES(full_name);
+        username = newuser.username,
+        full_name = newuser.full_name;
     """
     try:
         async with pool.acquire() as conn:

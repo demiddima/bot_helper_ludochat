@@ -1,7 +1,5 @@
 import os
 import sys
-
-# Load environment variables from .env file
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -15,30 +13,21 @@ def get_env_int(key):
         raise ValueError(f"Environment variable {key} must be an integer, got: {val}")
 
 try:
-    # Database configuration
-    DB_HOST = os.getenv("DB_HOST")
-    DB_PORT = get_env_int("DB_PORT")
-    DB_USER = os.getenv("DB_USER")
-    DB_PASSWORD = os.getenv("DB_PASSWORD")
-    DB_NAME = os.getenv("DB_NAME")
-
-    # Bot and channels configuration
     BOT_TOKEN = os.getenv("BOT_TOKEN")
     PUBLIC_CHAT_ID = get_env_int("PUBLIC_CHAT_ID")
     LOG_CHANNEL_ID = get_env_int("LOG_CHANNEL_ID")
     ERROR_LOG_CHANNEL_ID = get_env_int("ERROR_LOG_CHANNEL_ID")
 
-    # Admin IDs: comma-separated list
-    ADMIN_CHAT_IDS = [
-        int(x) for x in os.getenv("ADMIN_CHAT_IDS", "").split(",")
-        if x.strip()
-    ]
+    # Parse ADMIN_CHAT_IDS: allow comma or semicolon
+    import re
+    raw_admins = os.getenv("ADMIN_CHAT_IDS", "")
+    ADMIN_CHAT_IDS = [int(x) for x in re.split(r"[,;]", raw_admins) if x.strip()]
 
-    # Private destinations: list of "title:chat_id:description"
+    # Parse PRIVATE_DESTINATIONS: list of "Title:id:Description"
     PRIVATE_DESTINATIONS = []
-    raw = os.getenv("PRIVATE_DESTINATIONS", "")
-    if raw:
-        for item in raw.split(","):
+    raw_dest = os.getenv("PRIVATE_DESTINATIONS", "")
+    if raw_dest:
+        for item in raw_dest.split(","):
             parts = item.split(":", 2)
             if len(parts) != 3:
                 continue
