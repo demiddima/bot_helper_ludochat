@@ -12,7 +12,7 @@ from aiohttp import web
 from dotenv import load_dotenv
 from storage import init_db_pool
 from handlers.join import router as join_router
-import handlers.commands  # noqa: F401
+from handlers.commands import router as commands_router
 import services.invite_service as invite_service  # noqa: F401
 
 logging.basicConfig(level=logging.INFO)
@@ -49,15 +49,16 @@ else:
     PRIVATE_DESTINATIONS = []
 
 async def main():
-    # 1) Initialize bot without DefaultBotProperties
-    bot = Bot(token=BOT_TOKEN)
+    # 1) Initialize bot
+    bot = Bot(token=BOT_TOKEN, default=None)
     dp = Dispatcher()
 
     # 2) Initialize DB pool
     await init_db_pool()
 
-    # 3) Register routers (join, commands, etc.)
+    # 3) Register routers
     dp.include_router(join_router)
+    dp.include_router(commands_router)
 
     # 4) Start aiohttp server alongside polling
     app = web.Application()
