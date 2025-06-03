@@ -1,6 +1,8 @@
 import logging
+import re
 from aiogram import Router, F
 from aiogram.types import ChatJoinRequest, InlineKeyboardButton, InlineKeyboardMarkup, Message, CallbackQuery
+from aiogram.enums import ParseMode
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
 
@@ -92,8 +94,10 @@ async def process_start(message: Message):
                 parse_mode="Markdown"
             )
     else:
+        # If just /start without joining, include static link to public chat ludoochat
+        public_chat_url = "https://t.me/ludoochat"
         await message.reply(
-            "Привет! Чтобы пройти верификацию, нажмите «Вступить» в публичном чате. "
+            f"Привет! Чтобы пройти верификацию, перейдите в публичный чат по ссылке {public_chat_url} и нажмите «Вступить». "
             "Там вы получите кнопку «✅ Я согласен(а) и ознакомлен(а) со всем».",
             parse_mode="Markdown"
         )
