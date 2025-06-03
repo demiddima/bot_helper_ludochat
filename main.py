@@ -50,7 +50,7 @@ else:
 
 async def main():
     # 1) Initialize bot
-    bot = Bot(token=BOT_TOKEN, default=None)
+    bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
 
     # 2) Initialize DB pool

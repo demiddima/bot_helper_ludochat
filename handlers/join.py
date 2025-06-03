@@ -179,3 +179,4 @@ async def refresh_links(query: CallbackQuery):
     new_markup = InlineKeyboardMarkup(inline_keyboard=buttons)
     await query.message.edit_text(new_text, reply_markup=new_markup, parse_mode="HTML", disable_web_page_preview=True)
     await query.answer("Ссылки обновлены.")
+
