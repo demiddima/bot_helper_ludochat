@@ -18,6 +18,6 @@ RUN pip install --upgrade pip \
 COPY . .
 
 # Expose port for health check
-EXPOSE 8080
+EXPOSE 80
 
 CMD ["python", "-u", "main.py"]
