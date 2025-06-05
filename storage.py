@@ -6,8 +6,8 @@ from config import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 from utils import log_and_report
 from aiogram import Bot
 
-# Assuming ERROR_LOG_CHANNEL_ID is defined in config
-from config import ERROR_LOG_CHANNEL_ID, BOT_TOKEN
+# Assuming BOT_TOKEN and ERROR_LOG_CHANNEL_ID are defined in config
+from config import BOT_TOKEN, ERROR_LOG_CHANNEL_ID
 
 pool: Optional[Pool] = None
 bot = Bot(token=BOT_TOKEN)
@@ -54,6 +54,8 @@ async def init_tables() -> None:
     CREATE TABLE IF NOT EXISTS user_memberships (
         user_id BIGINT NOT NULL,
         chat_id BIGINT NOT NULL,
+        username VARCHAR(255),
+        full_name VARCHAR(255),
         joined_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (user_id, chat_id),
         FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
@@ -94,18 +96,21 @@ async def delete_chat(chat_id: int) -> None:
     except Exception as e:
         await log_and_report(e, f"delete_chat({chat_id})")
 
-async def add_user_to_chat(user_id: int, chat_id: int) -> None:
+async def add_user_to_chat(user_id: int, chat_id: int, username: str | None = None, full_name: str | None = None) -> None:
     if pool is None:
         raise RuntimeError("init_db_pool() должно быть вызвано перед add_user_to_chat()")
     sql = """
-    INSERT INTO user_memberships (user_id, chat_id)
-    VALUES (%s, %s)
-    ON DUPLICATE KEY UPDATE joined_at = CURRENT_TIMESTAMP;
+    INSERT INTO user_memberships (user_id, chat_id, username, full_name)
+    VALUES (%s, %s, %s, %s) AS new
+    ON DUPLICATE KEY UPDATE
+        username = new.username,
+        full_name = new.full_name,
+        joined_at = CURRENT_TIMESTAMP;
     """
     try:
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
-                await cur.execute(sql, (user_id, chat_id))
+                await cur.execute(sql, (user_id, chat_id, username or "", full_name or ""))
                 logging.info(f"[DB] Пользователь {user_id} добавлен в чат {chat_id}")
     except Exception as e:
         await log_and_report(e, f"add_user_to_chat({user_id}, {chat_id})")

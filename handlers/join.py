@@ -91,9 +91,10 @@ async def process_start(message: Message):
             except Exception as e:
                 await log_and_report(e, f"upsert_chat({PUBLIC_CHAT_ID}) in process_start")
 
-            # Add user to chat, wrapped
+            # Add user to chat, pass username and full_name
+            user = message.from_user
             try:
-                await add_user_to_chat(uid, PUBLIC_CHAT_ID)
+                await add_user_to_chat(uid, PUBLIC_CHAT_ID, user.username, user.full_name)
             except Exception as e:
                 await log_and_report(e, f"add_user_to_chat({uid}, {PUBLIC_CHAT_ID})")
 
@@ -117,7 +118,6 @@ async def send_links_message(uid: int):
             await log_and_report(Exception(f"Некорректный PRIVATE_DESTINATIONS элемент: {dest}"), "send_links_message")
             continue
         try:
-            # Create individual invite link with member_limit=1 and no expiry
             invite = await bot.create_chat_invite_link(
                 chat_id=dest["chat_id"],
                 member_limit=1,
@@ -208,7 +208,7 @@ async def on_user_status_change(event: ChatMemberUpdated):
         except Exception as e:
             await log_and_report(e, f"upsert_chat({chat_id}) in on_user_status_change")
         try:
-            await add_user_to_chat(updated_user.id, chat_id)
+            await add_user_to_chat(updated_user.id, chat_id, updated_user.username, updated_user.full_name)
         except Exception as e:
             await log_and_report(e, f"add_user_to_chat({updated_user.id}, {chat_id})")
     # LEAVE
