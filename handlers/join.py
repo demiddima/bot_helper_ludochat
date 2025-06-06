@@ -1,5 +1,4 @@
 import logging
-import re
 import asyncio
 import time
 from aiogram import Router, F
@@ -11,9 +10,8 @@ from aiogram.types import (
     CallbackQuery,
     ChatMemberUpdated
 )
-from aiogram.enums import ParseMode
 
-from config import BOT_TOKEN, PUBLIC_CHAT_ID, LOG_CHANNEL_ID, ERROR_LOG_CHANNEL_ID, PRIVATE_DESTINATIONS
+from config import PUBLIC_CHAT_ID, ERROR_LOG_CHANNEL_ID, PRIVATE_DESTINATIONS
 from storage import (
     upsert_chat,
     delete_chat,
@@ -21,23 +19,20 @@ from storage import (
     remove_user_from_chat
 )
 from utils import log_and_report, join_requests, cleanup_join_requests, get_bot
-
 from messages import escape_markdown, TERMS_MESSAGE, get_invite_links_text
 
 router = Router()
 
-# Ленивая инициализация Bot
 def get_bot_instance():
     return get_bot()
 
-BOT_ID = None  # задаётся при старте
+BOT_ID = None
 
 @router.startup()
 async def on_startup():
     global BOT_ID
     bot = get_bot_instance()
     BOT_ID = (await bot.get_me()).id
-    # Запускаем задачу очистки устаревших запросов
     asyncio.create_task(cleanup_join_requests())
 
 @router.chat_join_request(F.chat.id == PUBLIC_CHAT_ID)
@@ -79,7 +74,6 @@ async def process_start(message: Message):
         ts = join_requests.get(uid)
         if ts is None or time.time() - ts > 300:
             join_requests.pop(uid, None)
-            # 2.3: таймаут истёк
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Лудочат · Переходник", url="https://t.me/ludoochat")]
             ])
@@ -98,14 +92,12 @@ async def process_start(message: Message):
             except Exception as e:
                 await log_and_report(e, "approve_chat_join_request")
 
-            # Убеждаемся, что чат в БД
             try:
                 chat_obj = await bot.get_chat(PUBLIC_CHAT_ID)
                 await upsert_chat(chat_obj.id, chat_obj.title or "", chat_obj.type)
             except Exception as e:
                 await log_and_report(e, f"upsert_chat({PUBLIC_CHAT_ID}) in process_start")
 
-            #  Добавляем пользователя в user_memberships
             user = message.from_user
             try:
                 await add_user_to_chat(uid, PUBLIC_CHAT_ID, user.username, user.full_name)
@@ -114,7 +106,6 @@ async def process_start(message: Message):
 
             await send_links_message(uid)
         else:
-            # 2.2: неверный UID
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Лудочат · Переходник", url="https://t.me/ludoochat")]
             ])
@@ -125,7 +116,6 @@ async def process_start(message: Message):
                 disable_web_page_preview=True
             )
     else:
-        # 2.4: просто /start
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Лудочат · Переходник", url="https://t.me/ludoochat")]
         ])
@@ -140,9 +130,6 @@ async def send_links_message(uid: int):
     bot = get_bot_instance()
     links = []
     for dest in PRIVATE_DESTINATIONS:
-        if not all(k in dest for k in ("title", "chat_id", "description")):
-            await log_and_report(Exception(f"Некорректный PRIVATE_DESTINATIONS элемент: {dest}"), "send_links_message")
-            continue
         try:
             invite = await bot.create_chat_invite_link(
                 chat_id=dest["chat_id"],
@@ -152,11 +139,11 @@ async def send_links_message(uid: int):
             )
             links.append((dest["title"], invite.invite_link, dest["description"]))
         except Exception as e:
-            await log_and_report(e, f"create_chat_invite_link({uid}, {dest['chat_id']})")
-    # Кнопки: Лудочат, Выручка, Обновить ссылки (пример)
+            await log_and_report(e, f"create_chat_invite_link({uid}, {dest.get('chat_id')})")
+
     buttons = [
         [InlineKeyboardButton(text="Лудочат", url="https://t.me/ludoochat")],
-        [InlineKeyboardButton(text="Выручка", url="https://t.me/viruchkaa_bot?start=0012")],
+        [InlineKeyboardButton(text="Выручат", url="https://t.me/viruchkaa_bot?start=0012")],
         [InlineKeyboardButton(text="Обновить ссылки", callback_data=f"refresh_{uid}")]
     ]
     text = get_invite_links_text(links)
@@ -179,30 +166,14 @@ async def refresh_links(query: CallbackQuery):
     if user_id != uid:
         return await query.answer("Это не ваши ссылки.")
 
-    links = []
-    for dest in PRIVATE_DESTINATIONS:
-        if not all(k in dest for k in ("title", "chat_id", "description")):
-            await log_and_report(Exception(f"Некорректный PRIVATE_DESTINATIONS элемент: {dest}"), "refresh_links")
-            continue
-        try:
-            invite = await bot.create_chat_invite_link(
-                chat_id=dest["chat_id"],
-                member_limit=1,
-                creates_join_request=False,
-                name=f"Invite for {uid}"
-            )
-            links.append((dest["title"], invite.invite_link, dest["description"]))
-        except Exception as e:
-            await log_and_report(e, f"refresh create_chat_invite_link({uid}, {dest['chat_id']})")
+    # Acknowledge callback to remove loading state
+    await query.answer("Генерирую новые ссылки...")
 
-    buttons = [[InlineKeyboardButton(text="Обновить ссылки", callback_data=f"refresh_{uid}")]]
-    new_text = get_invite_links_text(links)
-    new_markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+    # Send a new message with fresh links
     try:
-        await query.message.edit_text(new_text, reply_markup=new_markup, parse_mode="Markdown", disable_web_page_preview=True)
-        await query.answer("Ссылки обновлены.")
+        await send_links_message(uid)
     except Exception as e:
-        await log_and_report(e, "refresh_links edit_text")
+        await log_and_report(e, "refresh_links send_links_message")
 
 @router.my_chat_member()
 async def on_bot_status_change(event: ChatMemberUpdated):
@@ -210,7 +181,6 @@ async def on_bot_status_change(event: ChatMemberUpdated):
     updated = event.new_chat_member.user
     if updated.id != BOT_ID:
         return
-
     new_status = event.new_chat_member.status
     chat = event.chat
     if new_status in ("administrator", "creator"):
@@ -230,12 +200,9 @@ async def on_user_status_change(event: ChatMemberUpdated):
     updated_user = event.new_chat_member.user
     if updated_user.id == BOT_ID:
         return
-
     old_status = event.old_chat_member.status
     new_status = event.new_chat_member.status
     chat_id = event.chat.id
-
-    # JOIN
     if old_status in ("left", "kicked") and new_status == "member":
         try:
             await upsert_chat(chat_id, event.chat.title or "", event.chat.type)
@@ -245,7 +212,6 @@ async def on_user_status_change(event: ChatMemberUpdated):
             await add_user_to_chat(updated_user.id, chat_id, updated_user.username, updated_user.full_name)
         except Exception as e:
             await log_and_report(e, f"add_user_to_chat({updated_user.id}, {chat_id})")
-    # LEAVE
     elif new_status in ("left", "kicked"):
         try:
             await remove_user_from_chat(updated_user.id, chat_id)
