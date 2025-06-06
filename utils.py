@@ -1,27 +1,47 @@
 import logging
 import asyncio
-import time
+import traceback
 from aiogram import Bot
-from config import BOT_TOKEN, ERROR_LOG_CHANNEL_ID
+from typing import Any, Dict
 
-bot = Bot(token=BOT_TOKEN)
+from config import ERROR_LOG_CHANNEL_ID, BOT_TOKEN
 
-async def log_and_report(exc: Exception, context: str):
-    text = f"[{context}] {str(exc).replace('`', '')}"
-    logging.error(text)
+# Lazy Bot initialization
+_bot: Bot | None = None
+
+def get_bot() -> Bot:
+    """
+    Возвращает глобальный экземпляр Bot. Если ещё не создан, создаёт его.
+    """
+    global _bot
+    if _bot is None:
+        _bot = Bot(token=BOT_TOKEN)
+    return _bot
+
+async def log_and_report(error: Exception, context: str) -> None:
+    """
+    Логирует ошибку в логи и отправляет текст ошибки в канал ошибок.
+    """
+    logging.error(f"[{context}] {error}")
+    tb = traceback.format_exc()
+    message = f"Ошибка в {context}: {error}\n<pre>{tb}</pre>"
     try:
-        await bot.send_message(ERROR_LOG_CHANNEL_ID, text, parse_mode="HTML")
+        bot = get_bot()
+        await bot.send_message(ERROR_LOG_CHANNEL_ID, message, parse_mode="HTML")
     except Exception as e:
-        logging.error(f"[FAIL] Не удалось отправить лог об ошибке: {e}")
+        logging.error(f"[log_and_report] Не удалось отправить сообщение об ошибке: {e}")
 
-# join_requests store with timestamp
-join_requests: dict[int, float] = {}
-REQUEST_TIMEOUT = 300  # seconds
+# Словарь для хранения временных меток запросов на вступление
+join_requests: Dict[int, float] = {}
 
-async def cleanup_join_requests():
+async def cleanup_join_requests() -> None:
+    """
+    Удаляет устаревшие записи из join_requests (старше 5 минут).
+    Запускается как background-задача.
+    """
     while True:
-        now = time.time()
-        expired = [uid for uid, ts in join_requests.items() if now - ts > REQUEST_TIMEOUT]
+        now = asyncio.get_event_loop().time()
+        expired = [uid for uid, ts in join_requests.items() if now - ts > 300]
         for uid in expired:
-            del join_requests[uid]
-        await asyncio.sleep(60)  # Проверяем каждые 60 секунд
+            join_requests.pop(uid, None)
+        await asyncio.sleep(60)

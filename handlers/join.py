@@ -12,8 +12,6 @@ from aiogram.types import (
     ChatMemberUpdated
 )
 from aiogram.enums import ParseMode
-from aiogram import Bot
-from aiogram.exceptions import TelegramForbiddenError
 
 from config import BOT_TOKEN, PUBLIC_CHAT_ID, LOG_CHANNEL_ID, ERROR_LOG_CHANNEL_ID, PRIVATE_DESTINATIONS
 from storage import (
@@ -22,19 +20,24 @@ from storage import (
     add_user_to_chat,
     remove_user_from_chat
 )
-from utils import log_and_report, join_requests, cleanup_join_requests
+from utils import log_and_report, join_requests, cleanup_join_requests, get_bot
 
 from messages import escape_markdown, TERMS_MESSAGE, get_invite_links_text
 
 router = Router()
-bot = Bot(token=BOT_TOKEN)
-BOT_ID = None  # will be set on startup
+
+# Ленивая инициализация Bot
+def get_bot_instance():
+    return get_bot()
+
+BOT_ID = None  # задаётся при старте
 
 @router.startup()
 async def on_startup():
     global BOT_ID
+    bot = get_bot_instance()
     BOT_ID = (await bot.get_me()).id
-    # start cleanup task
+    # Запускаем задачу очистки устаревших запросов
     asyncio.create_task(cleanup_join_requests())
 
 @router.chat_join_request(F.chat.id == PUBLIC_CHAT_ID)
@@ -42,28 +45,30 @@ async def handle_join(update: ChatJoinRequest):
     user = update.from_user
     join_requests[user.id] = time.time()
 
+    bot = get_bot_instance()
     bot_username = (await bot.get_me()).username
     payload = f"verify_{user.id}"
     url = f"https://t.me/{bot_username}?start={payload}"
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Я согласен(а) и ознакомлен(а) со всем", url=url)
-    ]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Я согласен(а) и ознакомлен(а) со всем", url=url)]
+    ])
 
     try:
         await bot.send_message(
             user.id,
             TERMS_MESSAGE,
             reply_markup=kb,
-            parse_mode="HTML",
+            parse_mode="Markdown",
             disable_web_page_preview=True
         )
         logging.info(f"[SEND] Условия отправлены пользователю {user.id}")
-    except TelegramForbiddenError as e:
+    except Exception as e:
         await log_and_report(e, "handle_join")
 
 @router.message(F.text.startswith("/start"))
 async def process_start(message: Message):
+    bot = get_bot_instance()
     parts = message.text.split()
     if len(parts) == 2 and parts[1].startswith("verify_"):
         try:
@@ -74,24 +79,33 @@ async def process_start(message: Message):
         ts = join_requests.get(uid)
         if ts is None or time.time() - ts > 300:
             join_requests.pop(uid, None)
-            return await message.reply("❗ Время ожидания прошло. Повторите запрос.", parse_mode="HTML")
+            # 2.3: таймаут истёк
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Лудочат · Переходник", url="https://t.me/ludoochat")]
+            ])
+            return await message.reply(
+                "Время ожидания прошло. Повторите вступление в [Лудочат · Переходник](https://t.me/ludoochat)",
+                reply_markup=kb,
+                parse_mode="Markdown",
+                disable_web_page_preview=True
+            )
 
         if message.from_user.id == uid:
             join_requests.pop(uid, None)
             try:
                 await bot.approve_chat_join_request(PUBLIC_CHAT_ID, uid)
                 logging.info(f"[APPROVE] Заявка пользователя {uid} одобрена")
-            except TelegramForbiddenError as e:
+            except Exception as e:
                 await log_and_report(e, "approve_chat_join_request")
 
-            # Ensure chat present
+            # Убеждаемся, что чат в БД
             try:
                 chat_obj = await bot.get_chat(PUBLIC_CHAT_ID)
                 await upsert_chat(chat_obj.id, chat_obj.title or "", chat_obj.type)
             except Exception as e:
                 await log_and_report(e, f"upsert_chat({PUBLIC_CHAT_ID}) in process_start")
 
-            # Add user to chat, pass username and full_name
+            #  Добавляем пользователя в user_memberships
             user = message.from_user
             try:
                 await add_user_to_chat(uid, PUBLIC_CHAT_ID, user.username, user.full_name)
@@ -100,18 +114,30 @@ async def process_start(message: Message):
 
             await send_links_message(uid)
         else:
+            # 2.2: неверный UID
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Лудочат · Переходник", url="https://t.me/ludoochat")]
+            ])
             await message.reply(
-                "❗ Неверная команда. Чтобы пройти верификацию, нажмите «Вступить» в публичном чате и используйте кнопку.",
-                parse_mode="HTML"
+                "Чтобы пройти верификацию, нажмите «Вступить» в [Лудочат · Переходник](https://t.me/ludoochat)",
+                reply_markup=kb,
+                parse_mode="Markdown",
+                disable_web_page_preview=True
             )
     else:
-        public_chat_url = "https://t.me/ludoochat"
+        # 2.4: просто /start
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Лудочат · Переходник", url="https://t.me/ludoochat")]
+        ])
         await message.reply(
-            f"Привет! Чтобы пройти верификацию, перейдите в публичный чат по ссылке {public_chat_url} и нажмите «Вступить».",
-            parse_mode="HTML"
+            "Привет! Чтобы пройти верификацию, перейдите в [Лудочат · Переходник](https://t.me/ludoochat) и нажмите «Вступить».",
+            reply_markup=kb,
+            parse_mode="Markdown",
+            disable_web_page_preview=True
         )
 
 async def send_links_message(uid: int):
+    bot = get_bot_instance()
     links = []
     for dest in PRIVATE_DESTINATIONS:
         if not all(k in dest for k in ("title", "chat_id", "description")):
@@ -125,18 +151,24 @@ async def send_links_message(uid: int):
                 name=f"Invite for {uid}"
             )
             links.append((dest["title"], invite.invite_link, dest["description"]))
-        except TelegramForbiddenError as e:
+        except Exception as e:
             await log_and_report(e, f"create_chat_invite_link({uid}, {dest['chat_id']})")
-    buttons = [[InlineKeyboardButton(text="Обновить ссылки", callback_data=f"refresh_{uid}")]]
+    # Кнопки: Лудочат, Выручка, Обновить ссылки (пример)
+    buttons = [
+        [InlineKeyboardButton(text="Лудочат", url="https://t.me/ludoochat")],
+        [InlineKeyboardButton(text="Выручка", url="https://t.me/viruchkaa_bot?start=0012")],
+        [InlineKeyboardButton(text="Обновить ссылки", callback_data=f"refresh_{uid}")]
+    ]
     text = get_invite_links_text(links)
     markup = InlineKeyboardMarkup(inline_keyboard=buttons)
     try:
-        await bot.send_message(uid, text, reply_markup=markup, parse_mode="HTML", disable_web_page_preview=True)
+        await bot.send_message(uid, text, reply_markup=markup, parse_mode="Markdown", disable_web_page_preview=True)
     except Exception as e:
         await log_and_report(e, "send_links_message")
 
 @router.callback_query(F.data.startswith("refresh_"))
 async def refresh_links(query: CallbackQuery):
+    bot = get_bot_instance()
     user_id = query.from_user.id
     try:
         _, uid_str = query.data.split("_", 1)
@@ -160,20 +192,21 @@ async def refresh_links(query: CallbackQuery):
                 name=f"Invite for {uid}"
             )
             links.append((dest["title"], invite.invite_link, dest["description"]))
-        except TelegramForbiddenError as e:
+        except Exception as e:
             await log_and_report(e, f"refresh create_chat_invite_link({uid}, {dest['chat_id']})")
 
     buttons = [[InlineKeyboardButton(text="Обновить ссылки", callback_data=f"refresh_{uid}")]]
     new_text = get_invite_links_text(links)
     new_markup = InlineKeyboardMarkup(inline_keyboard=buttons)
     try:
-        await query.message.edit_text(new_text, reply_markup=new_markup, parse_mode="HTML", disable_web_page_preview=True)
+        await query.message.edit_text(new_text, reply_markup=new_markup, parse_mode="Markdown", disable_web_page_preview=True)
         await query.answer("Ссылки обновлены.")
     except Exception as e:
         await log_and_report(e, "refresh_links edit_text")
 
 @router.my_chat_member()
 async def on_bot_status_change(event: ChatMemberUpdated):
+    bot = get_bot_instance()
     updated = event.new_chat_member.user
     if updated.id != BOT_ID:
         return
@@ -193,6 +226,7 @@ async def on_bot_status_change(event: ChatMemberUpdated):
 
 @router.chat_member()
 async def on_user_status_change(event: ChatMemberUpdated):
+    bot = get_bot_instance()
     updated_user = event.new_chat_member.user
     if updated_user.id == BOT_ID:
         return
