@@ -44,9 +44,7 @@ async def handle_join(update: ChatJoinRequest):
     bot = get_bot()
     bot_username = (await bot.get_me()).username
     url = f"https://t.me/{bot_username}?start=verify_{uid}"
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Я согласен(а)", url=url)
-    ]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Я согласен(а) и ознакомлен(а) со всем", url=url)]])
     try:
         await bot.send_message(
             uid,
@@ -63,14 +61,28 @@ async def handle_join(update: ChatJoinRequest):
 async def process_start(message: Message):
     bot = get_bot()
     parts = message.text.split()
+
+    # Case 2.4: plain /start
     if len(parts) != 2 or not parts[1].startswith("verify_"):
-        return
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Лудочат · Переходник", url="https://t.me/ludoochat")]
+        ])
+        return await message.reply(
+            "Привет! Чтобы пройти верификацию, перейдите в <a href=\"https://t.me/ludoochat\">Лудочат · Переходник</a> и нажмите «Вступить».",
+            reply_markup=kb,
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+
+    # extract uid
     try:
         uid = int(parts[1].split("_", 1)[1])
     except ValueError:
         return
 
     ts = join_requests.get(uid)
+
+    # Case 2.3: timeout
     if ts is None or time.time() - ts > 300:
         join_requests.pop(uid, None)
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -80,35 +92,36 @@ async def process_start(message: Message):
             "⏰ Время ожидания вышло. Повторите вступление через <a href=\"https://t.me/ludoochat\">Лудочат · Переходник</a>.",
             reply_markup=kb,
             parse_mode="HTML",
-            disable_web_page_preview=True,
+            disable_web_page_preview=True
         )
-    if message.from_user.id != uid:
+
+    # Case 2.1: success
+    if message.from_user.id == uid:
+        join_requests.pop(uid, None)
+        try:
+            await bot.approve_chat_join_request(PUBLIC_CHAT_ID, uid)
+            logging.info(f"[APPROVE] {uid}")
+        except Exception as e:
+            await log_and_report(e, f"approve({uid})")
+        try:
+            chat = await bot.get_chat(PUBLIC_CHAT_ID)
+            await upsert_chat(chat.id, chat.title or "", chat.type)
+            user = message.from_user
+            await add_user_to_chat(uid, PUBLIC_CHAT_ID, user.username, user.full_name)
+        except Exception as e:
+            await log_and_report(e, f"db_user({uid})")
+        await send_links_message(uid)
+    else:
+        # Case 2.2: wrong uid
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Лудочат · Переходник", url="https://t.me/ludoochat")]
         ])
         return await message.reply(
-            "Это не ваши ссылки.",
+            "Чтобы пройти верификацию, нажмите «Вступить» в <a href=\"https://t.me/ludoochat\">Лудочат · Переходник</a>.",
             reply_markup=kb,
             parse_mode="HTML",
-            disable_web_page_preview=True,
+            disable_web_page_preview=True
         )
-
-    join_requests.pop(uid, None)
-    try:
-        await bot.approve_chat_join_request(PUBLIC_CHAT_ID, uid)
-        logging.info(f"[APPROVE] {uid}")
-    except Exception as e:
-        await log_and_report(e, f"approve({uid})")
-
-    try:
-        chat = await bot.get_chat(PUBLIC_CHAT_ID)
-        await upsert_chat(chat.id, chat.title or "", chat.type)
-        user = message.from_user
-        await add_user_to_chat(uid, PUBLIC_CHAT_ID, user.username, user.full_name)
-    except Exception as e:
-        await log_and_report(e, f"db_user({uid})")
-
-    await send_links_message(uid)
 
 async def send_links_message(uid: int):
     bot = get_bot()
@@ -125,8 +138,6 @@ async def send_links_message(uid: int):
             await bot.revoke_chat_invite_link(chat_id=chat_id, invite_link=link)
         except TelegramAPIError as e:
             logging.warning(f"Revoke failed {link}: {e}")
-            if 'forbidden' in str(e).lower():
-                await log_and_report(e, f"revoke_forbidden({uid},{chat_id})")
     await delete_invite_links(uid)
 
     # Create new 1-day links
@@ -138,7 +149,6 @@ async def send_links_message(uid: int):
             invite = await bot.create_chat_invite_link(
                 chat_id=cid,
                 member_limit=1,
-                expire_date=expire_ts,
                 creates_join_request=False,
                 name=f"Invite for {uid}",
             )
@@ -163,8 +173,8 @@ async def send_links_message(uid: int):
 async def refresh_links(query: CallbackQuery):
     await query.answer("Обновляю...")
     try:
-        _, str_uid = query.data.split("_", 1)
-        uid = int(str_uid)
+        _, uid_str = query.data.split("_", 1)
+        uid = int(uid_str)
     except Exception:
         return await query.answer("Неверные данные.")
     if query.from_user.id != uid:
