@@ -53,7 +53,7 @@ async def init_tables() -> None:
 CREATE TABLE IF NOT EXISTS chats (
     id BIGINT PRIMARY KEY,
     title VARCHAR(256) NOT NULL,
-    type ENUM('public_channel','supergroup','group','private_channel') NOT NULL,
+    type ENUM('public_channel','supergroup','group','private_channel','bot') NOT NULL,
     added_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 """

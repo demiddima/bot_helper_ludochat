@@ -10,7 +10,7 @@ from aiogram.types import Message
 
 from aiohttp import web
 from dotenv import load_dotenv
-from storage import init_db_pool
+from storage import init_db_pool, upsert_chat
 from handlers.join import router as join_router
 from handlers.commands import router as commands_router
 import services.invite_service as invite_service  # noqa: F401
@@ -55,6 +55,9 @@ async def main():
 
     # 2) Initialize DB pool
     await init_db_pool()
+    # Регистрация бота в таблице chats
+    bot_info = await bot.get_me()
+    await upsert_chat(bot_info.id, bot_info.username or "", "bot")
 
     # 3) Register routers
     dp.include_router(join_router)
