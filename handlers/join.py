@@ -14,7 +14,7 @@ from aiogram.types import (
     CallbackQuery,
     ChatMemberUpdated
 )
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramForbiddenError, TelegramAPIError
 
 from config import PUBLIC_CHAT_ID, PRIVATE_DESTINATIONS
 from storage import (
@@ -52,9 +52,13 @@ async def handle_join(update: ChatJoinRequest) -> None:
     bot = get_bot()
     bot_username = (await bot.get_me()).username or ""
     url = f"https://t.me/{bot_username}?start=verify_{uid}"
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-        text="✅ Я согласен(а) и ознакомлен(а) со всем", url=url
-    )]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="✅ Я согласен(а) и ознакомлен(а) со всем",
+            url=url
+        )
+    ]])
+
     try:
         await bot.send_message(
             uid,
@@ -64,12 +68,11 @@ async def handle_join(update: ChatJoinRequest) -> None:
             disable_web_page_preview=True,
         )
         logging.info(f"[SEND] TERMS_MESSAGE to {uid}")
+    except TelegramForbiddenError:
+        # Пользователь заблокировал бота до начала верификации
+        await remove_user_from_chat(uid, BOT_ID)
     except TelegramAPIError as e:
-        if e.error_code == 403:
-            # Пользователь заблокировал бота до начала верификации
-            await remove_user_from_chat(uid, BOT_ID)
-        else:
-            await log_and_report(e, f"handle_join({uid})")
+        await log_and_report(e, f"handle_join({uid})")
 
 @router.message(F.text.startswith("/start"))
 async def process_start(message: Message) -> None:
@@ -163,10 +166,9 @@ async def send_links_message(uid: int) -> None:
     text = get_invite_links_text(links)
     try:
         await bot.send_message(uid, text, reply_markup=markup, parse_mode="HTML", disable_web_page_preview=True)
-    except TelegramAPIError as e:
-        if e.error_code == 403:
+    except TelegramForbiddenError:
             await remove_user_from_chat(uid, BOT_ID)
-        else:
+    except TelegramAPIError as e:
             await log_and_report(e, f"send_links({uid})")
 
 @router.callback_query(F.data.startswith("refresh_"))
