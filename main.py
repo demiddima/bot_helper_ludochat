@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()  # Load variables from .env
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-PUBLIC_CHAT_ID = int(os.getenv("PUBLIC_CHAT_ID", "0"))
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
 ERROR_LOG_CHANNEL_ID = int(os.getenv("ERROR_LOG_CHANNEL_ID", "0"))
 

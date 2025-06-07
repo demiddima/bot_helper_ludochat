@@ -19,7 +19,6 @@ try:
     if not BOT_TOKEN:
         raise KeyError("BOT_TOKEN is not set")
 
-    PUBLIC_CHAT_ID = get_env_int("PUBLIC_CHAT_ID")
     LOG_CHANNEL_ID = get_env_int("LOG_CHANNEL_ID")
     ERROR_LOG_CHANNEL_ID = get_env_int("ERROR_LOG_CHANNEL_ID")
 

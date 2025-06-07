@@ -44,11 +44,9 @@ bot_helper_ludochat/
    # TOKEN вашего бота
    BOT_TOKEN = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
-   # ID публичного чата, куда приходят заявки (через кнопку «Вступить»)
-   PUBLIC_CHAT_ID = -1001234567890
 
    # ID канала/чата для отправки логов об ошибках
-   ERROR_LOG_CHANNEL_ID = -1009876543210
+   ERROR_LOG_CHANNEL_ID = -100987655568
 
    # Список приватных чатов, куда бот будет генерировать invite-ссылки
    PRIVATE_DESTINATIONS = [
