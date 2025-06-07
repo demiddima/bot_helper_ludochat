@@ -18,19 +18,6 @@ def get_bot() -> Bot:
         _bot = Bot(token=BOT_TOKEN)
     return _bot
 
-async def log_and_report(error: Exception, context: str) -> None:
-    """
-    Логирует ошибку в логи и отправляет текст ошибки в канал ошибок.
-    """
-    logging.error(f"[{context}] {error}")
-    tb = traceback.format_exc()
-    message = f"Ошибка в {context}: {error}\n<pre>{tb}</pre>"
-    try:
-        bot = get_bot()
-        await bot.send_message(ERROR_LOG_CHANNEL_ID, message, parse_mode="HTML")
-    except Exception as e:
-        logging.error(f"[log_and_report] Не удалось отправить сообщение об ошибке: {e}")
-
 # Словарь для хранения временных меток запросов на вступление
 join_requests: Dict[int, float] = {}
 
@@ -40,8 +27,22 @@ async def cleanup_join_requests() -> None:
     Запускается как background-задача.
     """
     while True:
-        now = asyncio.get_event_loop().time()
-        expired = [uid for uid, ts in join_requests.items() if now - ts > 300]
-        for uid in expired:
-            join_requests.pop(uid, None)
+        try:
+            now = asyncio.get_event_loop().time()
+            expired = [uid for uid, ts in join_requests.items() if now - ts > 300]
+            for uid in expired:
+                join_requests.pop(uid, None)
+        except Exception as e:
+            logging.error(f"[ERROR] cleanup_join_requests: {e}\n{traceback.format_exc()}")
         await asyncio.sleep(60)
+
+async def log_and_report(error: Exception, context: str) -> None:
+    """
+    Логирует ошибку и отправляет сообщение в канал логирования.
+    """
+    logging.error(f"[ERROR] {context}: {error}\n{traceback.format_exc()}")
+    try:
+        bot = Bot(token=BOT_TOKEN)
+        await bot.send_message(ERROR_LOG_CHANNEL_ID, f"Error in {context}: {error}")
+    except Exception as e:
+        logging.error(f"[ERROR] log_and_report failed: {e}\n{traceback.format_exc()}")
