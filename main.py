@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from storage import init_db_pool, upsert_chat
 from handlers.join import router as join_router
 from handlers.commands import router as commands_router
+from handlers.membership import router as membership_router
 import services.invite_service as invite_service  # noqa: F401
 
 logging.basicConfig(level=logging.INFO)
@@ -61,6 +62,7 @@ async def main():
     # 3) Register routers
     dp.include_router(join_router)
     dp.include_router(commands_router)
+    dp.include_router(membership_router)  # регистрация роутера подписок
 
     # 4) Start aiohttp server alongside polling
     app = web.Application()

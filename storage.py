@@ -239,3 +239,22 @@ async def delete_invite_links(user_id: int) -> None:
         logging.info(f"[DB] delete_invite_links: {user_id}")
     except Exception as e:
         await log_and_report(e, f"delete_invite_links({user_id})")
+
+
+# ------------ TRACKED CHATS CRUD ------------
+
+async def get_all_chats() -> list[int]:
+    """Возвращает все chat_id из таблицы chats для отслеживания подписок."""
+    if pool is None:
+        raise RuntimeError("init_db_pool() must be called before get_all_chats()")
+    sql = "SELECT id FROM chats;"
+    try:
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(sql)
+                rows = await cur.fetchall()
+        return [row[0] for row in rows]
+    except Exception as e:
+        await log_and_report(e, "get_all_chats()")
+        return []
+
