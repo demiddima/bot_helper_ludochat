@@ -39,8 +39,8 @@ def get_invite_links_text(links: list[tuple[str, str, str]]) -> str:
 
     # Блочная цитата первого абзаца
     text = (
-        "<blockquote>Если вас беспокоит ваша анонимность при нахождении в сообществе, ознакомьтесь "
-        "<a href=\"https://graph.org/Anonimnost-i-konfidencialnost-uchastnikov-05-31\">с этим мануалом</a>.</blockquote>\n\n"
+        "<i><b>Если вас беспокоит ваша анонимность при нахождении в сообществе, ознакомьтесь "
+        "<a href=\"https://graph.org/Anonimnost-i-konfidencialnost-uchastnikov-05-31\">с этим мануалом</a></b></i>.\n\n"
     )
 
     # Основные ресурсы
