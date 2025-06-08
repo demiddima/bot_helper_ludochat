@@ -63,7 +63,7 @@ async def process_start(message: Message):
             await message.reply(
                 "⏰ Время ожидания вышло. Отправьте /start ещё раз.",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="/start", url=f"https://t.me/{bot_username}?start")]
+                    [InlineKeyboardButton(text="/start", url=f"https://t.me/{bot_username}?start=start")]
                 ])
             )
             return
