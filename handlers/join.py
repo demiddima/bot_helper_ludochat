@@ -1,12 +1,12 @@
 """Обработчик сценария вступления через /start с подтверждением в течение 5 минут.
 
-Обновлено: возвращён динамический текст со ссылками из messages.get_invite_links_text, сохранён общий шаблон.
-Кнопки-приватные чаты оставлены для удобства обновления ссылок.
+Обновлено: логика переведена на работу через REST API микросервиса (storage.py). 
+Корректно сохраняются users, memberships, invite_links.
 """
 
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Router, F
 from aiogram.types import (
@@ -21,10 +21,11 @@ from aiogram.exceptions import TelegramAPIError
 from config import PRIVATE_DESTINATIONS
 from storage import (
     upsert_chat,
-    add_user_to_chat,
-    remove_user_from_chat,
+    add_user,
+    add_membership,
+    remove_membership,
     save_invite_link,
-    get_valid_invite_links,
+    get_invite_links,
     delete_invite_links,
 )
 from utils import log_and_report, join_requests, cleanup_join_requests, get_bot
@@ -34,6 +35,25 @@ router = Router()
 BOT_ID: int | None = None
 _last_refresh: dict[int, float] = {}
 
+async def add_user_and_membership(user, chat_id):
+    user_data = {
+        "id": user.id,
+        "username": user.username or None,
+        "full_name": user.full_name or None,
+    }
+    await add_user(user_data)
+    await add_membership(user.id, chat_id)
+
+async def get_valid_invite_links(user_id):
+    now = datetime.utcnow()  # теперь "naive"
+    links = await get_invite_links(user_id)
+    result = []
+    for link in links:
+        expires = datetime.fromisoformat(link['expires_at']).replace(tzinfo=None)
+        if expires > now:
+            result.append((link['chat_id'], link['invite_link']))
+    return result
+
 @router.startup()
 async def on_startup():
     """Сохраняем ID бота и очищаем устаревшие заявки"""
@@ -42,7 +62,11 @@ async def on_startup():
     me = await bot.get_me()
     BOT_ID = me.id
     try:
-        await upsert_chat(BOT_ID, me.username or "bot", "bot")
+        await upsert_chat({
+            "id": BOT_ID,
+            "title": me.username or "bot",
+            "type": "bot"
+        })
     except Exception as exc:
         await log_and_report(exc, "upsert_chat(bot)")
     cleanup_join_requests()
@@ -70,7 +94,7 @@ async def process_start(message: Message):
         join_requests.pop(orig_uid, None)
         try:
             u = message.from_user
-            await add_user_to_chat(orig_uid, BOT_ID, u.username or "", u.full_name or "")
+            await add_user_and_membership(u, BOT_ID)
         except Exception as exc:
             await log_and_report(exc, f"add_user({orig_uid})")
         await send_invite_links(orig_uid)
@@ -80,7 +104,7 @@ async def process_start(message: Message):
     uid = message.from_user.id
     join_requests[uid] = time.time()
     try:
-        await add_user_to_chat(uid, BOT_ID, message.from_user.username or "", message.from_user.full_name or "")
+        await add_user_and_membership(message.from_user, BOT_ID)
     except Exception as exc:
         await log_and_report(exc, f"add_user_on_start({uid})")
 
@@ -128,7 +152,8 @@ async def send_invite_links(uid: int):
 
     # генерируем новые
     triples: list[tuple[str, str, str]] = []
-    expire_ts = int((datetime.utcnow() + timedelta(days=1)).timestamp())
+    expire_dt = datetime.utcnow() + timedelta(days=1)
+    expire_ts = int(expire_dt.timestamp())
     buttons: list[list[InlineKeyboardButton]] = []
     for dest in PRIVATE_DESTINATIONS:
         cid = dest['chat_id']
@@ -141,7 +166,9 @@ async def send_invite_links(uid: int):
                 name=f"Invite for {uid}",
                 creates_join_request=False,
             )
-            await save_invite_link(uid, cid, invite.invite_link)
+            now_str = datetime.utcnow().isoformat()
+            expires_str = expire_dt.isoformat()
+            await save_invite_link(uid, cid, invite.invite_link, now_str, expires_str)
             triples.append((title, invite.invite_link, dest.get('description', '')))
             buttons.append([InlineKeyboardButton(text=title, url=invite.invite_link)])
         except TelegramAPIError as exc:
@@ -154,13 +181,14 @@ async def send_invite_links(uid: int):
     # отправляем текст и кнопки
     await bot.send_message(uid, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML", disable_web_page_preview=True)
 
+# --- ВАЖНО: полностью убрано добавление пользователя при приглашении бота ---
 @router.my_chat_member()
 async def on_my_chat_member(update: ChatMemberUpdated):
-    """Обработка блокировки/разблокировки бота"""
-    user_id = update.from_user.id
+    # user_id = update.from_user.id
     status = update.new_chat_member.status
+
+    # При удалении из чата — удаляем membership (это ок)
     if status in ("left", "kicked"):
-        await remove_user_from_chat(user_id, BOT_ID)
-        join_requests.pop(user_id, None)
-    elif status == "member":
-        await add_user_to_chat(user_id, BOT_ID, update.from_user.username or "", update.from_user.full_name or "")
+        # await remove_membership(user_id, BOT_ID)
+        join_requests.pop(update.from_user.id, None)
+    # Больше никаких действий!

@@ -10,7 +10,7 @@ from aiogram.types import Message
 
 from aiohttp import web
 from dotenv import load_dotenv
-from storage import init_db_pool, upsert_chat
+from storage import upsert_chat
 from handlers.join import router as join_router
 from handlers.commands import router as commands_router
 from handlers.membership import router as membership_router
@@ -19,19 +19,17 @@ import services.invite_service as invite_service  # noqa: F401
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-load_dotenv()  # Load variables from .env
+load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
 ERROR_LOG_CHANNEL_ID = int(os.getenv("ERROR_LOG_CHANNEL_ID", "0"))
 
-# Parse comma or semicolon-separated list of admin IDs into a list of ints
 ADMIN_CHAT_IDS_RAW = os.getenv("ADMIN_CHAT_IDS", "")
 if not ADMIN_CHAT_IDS_RAW:
     ADMIN_CHAT_IDS = []
 else:
     ADMIN_CHAT_IDS = [int(x.strip()) for x in re.split(r"[,;]", ADMIN_CHAT_IDS_RAW) if x.strip()]
 
-# PRIVATE_DESTINATIONS: split "Title:id:Desc" items by comma, then colon
 PRIVATE_DESTINATIONS_RAW = os.getenv("PRIVATE_DESTINATIONS", "")
 if PRIVATE_DESTINATIONS_RAW:
     PRIVATE_DESTINATIONS = []
@@ -53,11 +51,14 @@ async def main():
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
 
-    # 2) Initialize DB pool
-    await init_db_pool()
-    # Регистрация бота в таблице chats
+    # 2) Регистрация бота в таблице chats через API
     bot_info = await bot.get_me()
-    await upsert_chat(bot_info.id, bot_info.username or "", "bot")
+    chat_data = {
+        "id": bot_info.id,
+        "title": bot_info.username or "",
+        "type": "bot"
+    }
+    await upsert_chat(chat_data)
 
     # 3) Register routers
     dp.include_router(join_router)

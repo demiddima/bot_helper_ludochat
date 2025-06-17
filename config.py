@@ -41,18 +41,8 @@ try:
                     "description": description
                 })
 
-    # Database configuration
-    DB_HOST = os.getenv("DB_HOST")
-    DB_PORT = get_env_int("DB_PORT")
-    DB_USER = os.getenv("DB_USER")
-    if not DB_USER:
-        raise KeyError("DB_USER is not set")
-    DB_PASSWORD = os.getenv("DB_PASSWORD")
-    if not DB_PASSWORD:
-        raise KeyError("DB_PASSWORD is not set")
-    DB_NAME = os.getenv("DB_NAME")
-    if not DB_NAME:
-        raise KeyError("DB_NAME is not set")
+    # REST API config for DB microservice
+    DB_API_URL = os.getenv("DB_API_URL", "http://db-api:8000")
 
 except Exception as e:
     print(f"[CONFIG ERROR] {e}", file=sys.stderr)
