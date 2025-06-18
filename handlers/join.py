@@ -184,11 +184,12 @@ async def send_invite_links(uid: int):
 # --- ВАЖНО: полностью убрано добавление пользователя при приглашении бота ---
 @router.my_chat_member()
 async def on_my_chat_member(update: ChatMemberUpdated):
-    # user_id = update.from_user.id
     status = update.new_chat_member.status
 
-    # При удалении из чата — удаляем membership (это ок)
     if status in ("left", "kicked"):
-        # await remove_membership(user_id, BOT_ID)
         join_requests.pop(update.from_user.id, None)
-    # Больше никаких действий!
+        try:
+            await remove_membership(update.from_user.id, BOT_ID)
+            logging.info(f"[MEMBERSHIP] Removed membership: user {update.from_user.id} -> bot {BOT_ID}")
+        except Exception as exc:
+            logging.warning(f"[WARNING] Failed to remove membership for user {update.from_user.id}: {exc}")
