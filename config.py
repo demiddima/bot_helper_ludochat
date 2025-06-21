@@ -44,6 +44,11 @@ try:
     # REST API config for DB microservice
     DB_API_URL = os.getenv("DB_API_URL", "http://db-api:8000")
 
+    # === New: API key for DB service access ===
+    API_KEY_VALUE = os.getenv("API_KEY_VALUE")
+    if not API_KEY_VALUE:
+        raise KeyError("API_KEY_VALUE is not set")
+
 except Exception as e:
     print(f"[CONFIG ERROR] {e}", file=sys.stderr)
     sys.exit(1)

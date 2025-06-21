@@ -1,12 +1,12 @@
 """Обработчик сценария вступления через /start с подтверждением в течение 5 минут.
 
-Обновлено: логика переведена на работу через REST API микросервиса (storage.py). 
+Обновлено: логика переведена на работу через REST API микросервиса (storage.py).
 Корректно сохраняются users, memberships, invite_links.
 """
 
 import logging
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from aiogram import Router, F
 from aiogram.types import (
@@ -29,7 +29,8 @@ from storage import (
     delete_invite_links,
 )
 from utils import log_and_report, join_requests, cleanup_join_requests, get_bot
-from messages import TERMS_MESSAGE, get_invite_links_text
+# Импортируем шаблон и дополнительное сообщение
+from messages import TERMS_MESSAGE, INVITE_TEXT_TEMPLATE, MORE_INFO
 
 router = Router()
 BOT_ID: int | None = None
@@ -45,9 +46,9 @@ async def add_user_and_membership(user, chat_id):
     await add_membership(user.id, chat_id)
 
 async def get_valid_invite_links(user_id):
-    now = datetime.utcnow()  # теперь "naive"
+    now = datetime.utcnow()
     links = await get_invite_links(user_id)
-    result = []
+    result: list[tuple[int, str]] = []
     for link in links:
         expires = datetime.fromisoformat(link['expires_at']).replace(tzinfo=None)
         if expires > now:
@@ -56,7 +57,6 @@ async def get_valid_invite_links(user_id):
 
 @router.startup()
 async def on_startup():
-    """Сохраняем ID бота и очищаем устаревшие заявки"""
     global BOT_ID
     bot = get_bot()
     me = await bot.get_me()
@@ -73,7 +73,6 @@ async def on_startup():
 
 @router.message(F.text.startswith("/start"))
 async def process_start(message: Message):
-    """Обрабатываем /start и deep-link /start verify_<uid>"""
     bot = get_bot()
     parts = message.text.split()
     bot_username = (await bot.get_me()).username or ""
@@ -86,9 +85,16 @@ async def process_start(message: Message):
             join_requests.pop(orig_uid, None)
             await message.reply(
                 "⏰ Время ожидания вышло. Отправьте /start ещё раз.",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="/start", url=f"https://t.me/{bot_username}?start=start")]
-                ])
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="/start",
+                                url=f"https://t.me/{bot_username}?start=start"
+                            )
+                        ]
+                    ]
+                )
             )
             return
         join_requests.pop(orig_uid, None)
@@ -109,12 +115,16 @@ async def process_start(message: Message):
         await log_and_report(exc, f"add_user_on_start({uid})")
 
     confirm_link = f"https://t.me/{bot_username}?start=verify_{uid}"
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="✅ Я согласен(а) и ознакомлен(а) со всем",
-            url=confirm_link
-        )]
-    ])
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Я согласен(а) и ознакомлен(а) со всем",
+                    url=confirm_link
+                )
+            ]
+        ]
+    )
     await bot.send_message(
         uid,
         TERMS_MESSAGE,
@@ -125,7 +135,6 @@ async def process_start(message: Message):
 
 @router.callback_query(F.data.startswith("refresh_"))
 async def on_refresh(query: CallbackQuery):
-    """Обработка обновления ссылок"""
     await query.answer("Обновляю...")
     _, uid_str = query.data.split("_", 1)
     uid = int(uid_str)
@@ -134,14 +143,13 @@ async def on_refresh(query: CallbackQuery):
     await send_invite_links(uid)
 
 async def send_invite_links(uid: int):
-    """Генерируем новые инвайт-ссылки, формируем текст и кнопки"""
     bot = get_bot()
     now = time.time()
     if now - _last_refresh.get(uid, 0) < 10:
         return
     _last_refresh[uid] = now
 
-    # отзываем старые ссылки
+    # отзываем старые ссылки и удаляем их из БД
     existing = await get_valid_invite_links(uid)
     for chat_id, link in existing:
         try:
@@ -150,11 +158,12 @@ async def send_invite_links(uid: int):
             pass
     await delete_invite_links(uid)
 
-    # генерируем новые
+    # создаем новые ссылки
     triples: list[tuple[str, str, str]] = []
     expire_dt = datetime.utcnow() + timedelta(days=1)
     expire_ts = int(expire_dt.timestamp())
     buttons: list[list[InlineKeyboardButton]] = []
+
     for dest in PRIVATE_DESTINATIONS:
         cid = dest['chat_id']
         title = dest.get('title', 'Chat')
@@ -173,23 +182,43 @@ async def send_invite_links(uid: int):
             buttons.append([InlineKeyboardButton(text=title, url=invite.invite_link)])
         except TelegramAPIError as exc:
             logging.warning(f"Failed to create link for {cid}: {exc}")
-    # кнопка обновления
-    buttons.append([InlineKeyboardButton(text="🔄 Обновить ссылки", callback_data=f"refresh_{uid}")])
 
-    # формируем текст из шаблона
-    text = get_invite_links_text(triples)
-    # отправляем текст и кнопки
-    await bot.send_message(uid, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML", disable_web_page_preview=True)
+    buttons.append([
+        InlineKeyboardButton(text="🔄 Обновить ссылки", callback_data=f"refresh_{uid}")
+    ])
 
-# --- ВАЖНО: полностью убрано добавление пользователя при приглашении бота ---
+    # формируем текст через шаблон
+    link_map = {title: link for title, link, _ in triples}
+    text = INVITE_TEXT_TEMPLATE.format(
+        ludochat_link=link_map.get("Лудочат", "#"),
+        viruchat_link=link_map.get("Выручат", "#")
+    )
+    await bot.send_message(
+        uid,
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+    # дополнительное уведомление
+    await bot.send_message(
+        uid,
+        MORE_INFO,
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
 @router.my_chat_member()
 async def on_my_chat_member(update: ChatMemberUpdated):
     status = update.new_chat_member.status
-
     if status in ("left", "kicked"):
         join_requests.pop(update.from_user.id, None)
         try:
             await remove_membership(update.from_user.id, BOT_ID)
-            logging.info(f"[MEMBERSHIP] Removed membership: user {update.from_user.id} -> bot {BOT_ID}")
+            logging.info(
+                f"[MEMBERSHIP] Removed membership: user {update.from_user.id} -> bot {BOT_ID}"
+            )
         except Exception as exc:
-            logging.warning(f"[WARNING] Failed to remove membership for user {update.from_user.id}: {exc}")
+            logging.warning(
+                f"[WARNING] Failed to remove membership for user {update.from_user.id}: {exc}"
+            )
