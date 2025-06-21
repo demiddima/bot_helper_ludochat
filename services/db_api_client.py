@@ -112,6 +112,15 @@ class DBApiClient:
         )
         r.raise_for_status()
 
+    # --- Новый метод для подсчёта визитов по ссылке ---
+    async def track_link_visit(self, link_key: str) -> dict:
+        r = await self.client.post(
+            "/links/visit",
+            json={"link_key": link_key}
+        )
+        r.raise_for_status()
+        return r.json()
+
     async def close(self):
         await self.client.aclose()
 

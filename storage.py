@@ -76,3 +76,7 @@ async def set_basic(user_id, completed):
 @retry(**RETRY)
 async def set_advanced(user_id, completed):
     await db_api_client.set_advanced(user_id, completed)
+    
+@retry(**RETRY)
+async def track_link_visit(link_key: str):
+    return await db_api_client.track_link_visit(link_key)

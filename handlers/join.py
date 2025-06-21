@@ -1,11 +1,13 @@
-"""Обработчик сценария вступления через /start с подтверждением в течение 5 минут.
+"""
+Обработчик сценария вступления через /start с подтверждением в течение 5 минут.
 
 Обновлено: логика переведена на работу через REST API микросервиса (storage.py).
-Корректно сохраняются users, memberships, invite_links.
+Корректно сохраняются users, memberships, invite_links и фиксируются переходы по deep-link.
 """
 
 import logging
 import time
+import asyncio
 from datetime import datetime, timedelta
 
 from aiogram import Router, F
@@ -27,9 +29,9 @@ from storage import (
     save_invite_link,
     get_invite_links,
     delete_invite_links,
+    track_link_visit,  # импорт метода для подсчёта переходов
 )
 from utils import log_and_report, join_requests, cleanup_join_requests, get_bot
-# Импортируем шаблон и дополнительное сообщение
 from messages import TERMS_MESSAGE, INVITE_TEXT_TEMPLATE, MORE_INFO
 
 router = Router()
@@ -77,7 +79,7 @@ async def process_start(message: Message):
     parts = message.text.split()
     bot_username = (await bot.get_me()).username or ""
 
-    # deep-link подтверждения
+    # deep-link подтверждения verify_<user_id>
     if len(parts) == 2 and parts[1].startswith("verify_"):
         orig_uid = int(parts[1].split("_", 1)[1])
         ts = join_requests.get(orig_uid)
@@ -86,17 +88,16 @@ async def process_start(message: Message):
             await message.reply(
                 "⏰ Время ожидания вышло. Отправьте /start ещё раз.",
                 reply_markup=InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [
-                            InlineKeyboardButton(
-                                text="/start",
-                                url=f"https://t.me/{bot_username}?start=start"
-                            )
-                        ]
-                    ]
+                    inline_keyboard=[[
+                        InlineKeyboardButton(
+                            text="/start",
+                            url=f"https://t.me/{bot_username}?start=start"
+                        )
+                    ]]
                 )
             )
             return
+
         join_requests.pop(orig_uid, None)
         try:
             u = message.from_user
@@ -106,7 +107,13 @@ async def process_start(message: Message):
         await send_invite_links(orig_uid)
         return
 
-    # простой /start
+    # простой /start или deep-link без verify_
+    # фиксируем переход по ссылке, если есть аргумент
+    if len(parts) == 2:
+        link_key = parts[1]
+        # fire-and-forget, чтобы не блокировать остальную логику
+        asyncio.create_task(track_link_visit(link_key))
+
     uid = message.from_user.id
     join_requests[uid] = time.time()
     try:
@@ -115,16 +122,12 @@ async def process_start(message: Message):
         await log_and_report(exc, f"add_user_on_start({uid})")
 
     confirm_link = f"https://t.me/{bot_username}?start=verify_{uid}"
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="✅ Я согласен(а) и ознакомлен(а) со всем",
-                    url=confirm_link
-                )
-            ]
-        ]
-    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="✅ Я согласен(а) и ознакомлен(а) со всем",
+            url=confirm_link
+        )
+    ]])
     await bot.send_message(
         uid,
         TERMS_MESSAGE,
@@ -149,7 +152,7 @@ async def send_invite_links(uid: int):
         return
     _last_refresh[uid] = now
 
-    # отзываем старые ссылки и удаляем их из БД
+    # отзыв старых ссылок
     existing = await get_valid_invite_links(uid)
     for chat_id, link in existing:
         try:
@@ -158,7 +161,7 @@ async def send_invite_links(uid: int):
             pass
     await delete_invite_links(uid)
 
-    # создаем новые ссылки
+    # создание новых
     triples: list[tuple[str, str, str]] = []
     expire_dt = datetime.utcnow() + timedelta(days=1)
     expire_ts = int(expire_dt.timestamp())
@@ -183,11 +186,8 @@ async def send_invite_links(uid: int):
         except TelegramAPIError as exc:
             logging.warning(f"Failed to create link for {cid}: {exc}")
 
-    buttons.append([
-        InlineKeyboardButton(text="🔄 Обновить ссылки", callback_data=f"refresh_{uid}")
-    ])
+    buttons.append([InlineKeyboardButton(text="🔄 Обновить ссылки", callback_data=f"refresh_{uid}")])
 
-    # формируем текст через шаблон
     link_map = {title: link for title, link, _ in triples}
     text = INVITE_TEXT_TEMPLATE.format(
         ludochat_link=link_map.get("Лудочат", "#"),
@@ -200,7 +200,6 @@ async def send_invite_links(uid: int):
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
-    # дополнительное уведомление
     await bot.send_message(
         uid,
         MORE_INFO,
