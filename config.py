@@ -22,29 +22,50 @@ try:
     LOG_CHANNEL_ID = get_env_int("LOG_CHANNEL_ID")
     ERROR_LOG_CHANNEL_ID = get_env_int("ERROR_LOG_CHANNEL_ID")
 
-    # ADMIN_CHAT_IDS: allow comma or semicolon separated list of ints
-    import re
+    # ADMIN_CHAT_IDS: semicolon-separated list of ints
     raw_admin = os.getenv("ADMIN_CHAT_IDS", "")
-    ADMIN_CHAT_IDS = [int(x) for x in re.split(r"[,;]", raw_admin) if x.strip()]
+    ADMIN_CHAT_IDS = [int(x) for x in raw_admin.split(";") if x]
 
-    # PRIVATE_DESTINATIONS: "Title:id:Description", separated by comma or semicolon
-    raw_dest = os.getenv("PRIVATE_DESTINATIONS", "")
+    # INVITE link mode: static or dynamic
+    INVITE_LINK_MODE = os.getenv("INVITE_LINK_MODE", "dynamic").strip()
+
+    # PRIVATE_DESTINATIONS: entries separated by semicolons, each "Title:chat_id:Description"
+    raw_dest = os.getenv("PRIVATE_DESTINATIONS", "").strip()
+    # Strip surrounding quotes if present
+    if (raw_dest.startswith('"') and raw_dest.endswith('"')) or (raw_dest.startswith("'") and raw_dest.endswith("'")):
+        raw_dest = raw_dest[1:-1]
+
     PRIVATE_DESTINATIONS = []
-    for item in re.split(r"[,;]", raw_dest):
-        if item.strip():
-            parts = item.split(":", 2)
-            if len(parts) == 3:
-                title, chat_id, description = parts
-                PRIVATE_DESTINATIONS.append({
-                    "title": title,
-                    "chat_id": int(chat_id),
-                    "description": description
-                })
+    if raw_dest:
+        for item in raw_dest.split(";"):
+            item = item.strip()
+            if not item:
+                continue
+            # split title and the rest by first colon
+            title, sep, rest = item.partition(":")
+            if not sep:
+                continue
+            # split rest into chat_id and description by last colon
+            idx = rest.rfind(":")
+            if idx == -1:
+                continue
+            chat_id = rest[:idx].strip()
+            description = rest[idx+1:].strip()
+            # support both URL strings (static) and numeric chat IDs (dynamic)
+            if chat_id.startswith("http"):
+                chat_id_value = chat_id
+            else:
+                chat_id_value = int(chat_id)
+            PRIVATE_DESTINATIONS.append({
+                "title": title.strip(),
+                "chat_id": chat_id_value,
+                "description": description
+            })
 
     # REST API config for DB microservice
     DB_API_URL = os.getenv("DB_API_URL", "http://db-api:8000")
 
-    # === New: API key for DB service access ===
+    # API key for DB service access
     API_KEY_VALUE = os.getenv("API_KEY_VALUE")
     if not API_KEY_VALUE:
         raise KeyError("API_KEY_VALUE is not set")

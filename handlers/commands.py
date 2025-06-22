@@ -7,6 +7,9 @@ from aiogram import Router, F
 from aiogram.types import Message
 from aiogram.filters.command import Command
 
+from config import ADMIN_CHAT_IDS, ERROR_LOG_CHANNEL_ID
+from handlers.join import send_invite_links
+
 router = Router()
 
 # Load command responses from commands.json
@@ -23,71 +26,75 @@ except Exception as e:
 async def handle_slash_command(message: Message):
     """
     Обрабатывает команды /sell_account и /quit_gambling при ответе на сообщение.
-    Для sell_account: удаляет команду и далее обе через таймаут.
-    Для quit_gambling: не удаляет вопросы и ответы, просто отправляет ответ.
     """
     chat_id = message.chat.id
     user_id = message.from_user.id
+
+    if chat_id not in ADMIN_CHAT_IDS:
+        logging.info(f"[IGNORED] Команда в неразрешённом чате {chat_id}.")
+        return
 
     command_name = message.text.lstrip("/").split("@")[0].lower()
     if command_name not in RESPONSES:
         logging.info(f"[UNKNOWN] Команда {command_name} не найдена.")
         return
 
-    # Only admins and creators allowed
     member = await message.bot.get_chat_member(chat_id, user_id)
     if member.status not in ("administrator", "creator"):
         logging.info(f"[IGNORED] {message.from_user.full_name} ({member.status}) попытался использовать {message.text}.")
         return
 
     replied_msg = message.reply_to_message
-    username_to_insert = f"@{replied_msg.from_user.username}" if replied_msg.from_user.username else replied_msg.from_user.full_name
+    username_to_insert = (
+        f"@{replied_msg.from_user.username}" if replied_msg.from_user.username else replied_msg.from_user.full_name
+    )
 
-    # Delete the command message in both cases
     try:
         await message.delete()
-        logging.info(f"[DELETE CMD] Команда /{command_name} удалена.")
     except Exception as e:
         logging.warning(f"[FAIL DELETE CMD] Не удалось удалить команду: {e}")
 
-    tpl = RESPONSES.get(command_name, {})
-    text_template = tpl.get("text", "")
-    autodelete = tpl.get("autodelete", False)
+    tpl = RESPONSES[command_name]
+    final_text = tpl.get("text", "").replace("{username}", username_to_insert)
 
-    final_text = text_template.replace("{username}", username_to_insert)
+    response_message = await message.bot.send_message(
+        chat_id,
+        final_text,
+        reply_to_message_id=replied_msg.message_id,
+        parse_mode="HTML",
+        disable_web_page_preview=True
+    )
 
-    response_message = None
-
-    # Send response in chat as reply using HTML parse mode
-    try:
-        response_message = await message.bot.send_message(
-            chat_id,
-            final_text,
-            reply_to_message_id=replied_msg.message_id,
-            parse_mode="HTML",
-            disable_web_page_preview=True
-        )
-        logging.info(f"[SENT CHAT] Ответ на команду /{command_name} отправлен.")
-    except Exception as e:
-        logging.warning(f"[FAIL SEND CHAT] Не удалось отправить ответ в чат: {e}")
-        return
-
-    # If sell_account, schedule deletion of question and answer
-    if command_name == "sell_account" and autodelete:
-        question_id = replied_msg.message_id
-        answer_id = response_message.message_id
-
+    if command_name == "sell_account" and tpl.get("autodelete", False):
         async def delete_later():
             await asyncio.sleep(120)
             try:
-                await message.bot.delete_message(chat_id, question_id)
-                logging.info(f"[DELETE Q] Удалён вопрос (message_id={question_id}).")
-            except Exception:
+                await message.bot.delete_message(chat_id, replied_msg.message_id)
+            except:
                 pass
             try:
-                await message.bot.delete_message(chat_id, answer_id)
-                logging.info(f"[DELETE A] Удалён ответ (message_id={answer_id}).")
-            except Exception:
+                await message.bot.delete_message(chat_id, response_message.message_id)
+            except:
                 pass
-
         asyncio.create_task(delete_later())
+
+@router.message(Command("update_links"), F.chat.type == "private")
+async def cmd_update_links(message: Message):
+    """
+    Обновляет индивидуальные ссылки (1 час, по PRIVATE_DESTINATIONS).
+    """
+    await message.answer("Обновляю ваши ссылки…")
+    try:
+        await send_invite_links(message.from_user.id)
+    except Exception as e:
+        logging.error(f"[UPDATE_LINKS] {e}")
+        await message.answer("Не удалось обновить ссылки. Попробуйте позже.")
+
+@router.message(Command("report_the_bug"), F.chat.type == "private")
+async def cmd_report_bug(message: Message):
+    """
+    Сообщить о баге администратору.
+    """
+    await message.answer(
+        "Если вы нашли ошибку, баг, не работающую кнопку, сообщите об этом сюда @admi_ludochat"
+    )

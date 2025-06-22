@@ -1,14 +1,7 @@
-"""
-Обработчик сценария вступления через /start с подтверждением в течение 5 минут.
-
-Обновлено: логика переведена на работу через REST API микросервиса (storage.py).
-Корректно сохраняются users, memberships, invite_links и фиксируются переходы по deep-link.
-"""
-
 import logging
 import time
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Router, F
 from aiogram.types import (
@@ -17,10 +10,11 @@ from aiogram.types import (
     Message,
     CallbackQuery,
     ChatMemberUpdated,
+    Update,
 )
 from aiogram.exceptions import TelegramAPIError
 
-from config import PRIVATE_DESTINATIONS
+from config import PRIVATE_DESTINATIONS, LOG_CHANNEL_ID, ERROR_LOG_CHANNEL_ID, INVITE_LINK_MODE
 from storage import (
     upsert_chat,
     add_user,
@@ -29,7 +23,7 @@ from storage import (
     save_invite_link,
     get_invite_links,
     delete_invite_links,
-    track_link_visit,  # импорт метода для подсчёта переходов
+    track_link_visit,
 )
 from utils import log_and_report, join_requests, cleanup_join_requests, get_bot
 from messages import TERMS_MESSAGE, INVITE_TEXT_TEMPLATE, MORE_INFO
@@ -59,6 +53,13 @@ async def get_valid_invite_links(user_id):
 
 @router.startup()
 async def on_startup():
+    def handle_asyncio_exception(loop, context):
+        bot = get_bot()
+        err = context.get("exception") or context.get("message")
+        text = f"⚠️ <b>Asyncio Exception:</b> <pre>{err}</pre>"
+        asyncio.create_task(bot.send_message(ERROR_LOG_CHANNEL_ID, text, parse_mode="HTML"))
+    asyncio.get_event_loop().set_exception_handler(handle_asyncio_exception)
+    
     global BOT_ID
     bot = get_bot()
     me = await bot.get_me()
@@ -79,7 +80,6 @@ async def process_start(message: Message):
     parts = message.text.split()
     bot_username = (await bot.get_me()).username or ""
 
-    # deep-link подтверждения verify_<user_id>
     if len(parts) == 2 and parts[1].startswith("verify_"):
         orig_uid = int(parts[1].split("_", 1)[1])
         ts = join_requests.get(orig_uid)
@@ -88,12 +88,10 @@ async def process_start(message: Message):
             await message.reply(
                 "⏰ Время ожидания вышло. Отправьте /start ещё раз.",
                 reply_markup=InlineKeyboardMarkup(
-                    inline_keyboard=[[
-                        InlineKeyboardButton(
-                            text="/start",
-                            url=f"https://t.me/{bot_username}?start=start"
-                        )
-                    ]]
+                    inline_keyboard=[[InlineKeyboardButton(
+                        text="/start",
+                        url=f"https://t.me/{bot_username}?start=start"
+                    )]]
                 )
             )
             return
@@ -107,12 +105,20 @@ async def process_start(message: Message):
         await send_invite_links(orig_uid)
         return
 
-    # простой /start или deep-link без verify_
-    # фиксируем переход по ссылке, если есть аргумент
     if len(parts) == 2:
         link_key = parts[1]
-        # fire-and-forget, чтобы не блокировать остальную логику
-        asyncio.create_task(track_link_visit(link_key))
+        async def tracked_task():
+            try:
+                await track_link_visit(link_key)
+            except Exception as exc:
+                bot = get_bot()
+                text = (
+                    f"🚨 <b>Ошибка в track_link_visit</b>\n"
+                    f"<pre>{repr(exc)}</pre>\n"
+                    f"<b>link_key:</b> <code>{link_key}</code>"
+                )
+                await bot.send_message(ERROR_LOG_CHANNEL_ID, text, parse_mode="HTML")
+        asyncio.create_task(tracked_task())
 
     uid = message.from_user.id
     join_requests[uid] = time.time()
@@ -122,7 +128,7 @@ async def process_start(message: Message):
         await log_and_report(exc, f"add_user_on_start({uid})")
 
     confirm_link = f"https://t.me/{bot_username}?start=verify_{uid}"
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
+    kb = InlineKeyboardMarkup(inline_keyboard=[[ 
         InlineKeyboardButton(
             text="✅ Я согласен(а) и ознакомлен(а) со всем",
             url=confirm_link
@@ -152,7 +158,7 @@ async def send_invite_links(uid: int):
         return
     _last_refresh[uid] = now
 
-    # отзыв старых ссылок
+    # отзываем старые ссылки
     existing = await get_valid_invite_links(uid)
     for chat_id, link in existing:
         try:
@@ -161,38 +167,47 @@ async def send_invite_links(uid: int):
             pass
     await delete_invite_links(uid)
 
-    # создание новых
     triples: list[tuple[str, str, str]] = []
-    expire_dt = datetime.utcnow() + timedelta(days=1)
-    expire_ts = int(expire_dt.timestamp())
+    expire_ts = int(time.time()) + 3600  # 1 час
+    expire_dt = datetime.now(timezone.utc) + timedelta(hours=1)
     buttons: list[list[InlineKeyboardButton]] = []
 
     for dest in PRIVATE_DESTINATIONS:
         cid = dest['chat_id']
         title = dest.get('title', 'Chat')
-        try:
-            invite = await bot.create_chat_invite_link(
-                chat_id=cid,
-                member_limit=1,
-                expire_date=expire_ts,
-                name=f"Invite for {uid}",
-                creates_join_request=False,
-            )
-            now_str = datetime.utcnow().isoformat()
-            expires_str = expire_dt.isoformat()
-            await save_invite_link(uid, cid, invite.invite_link, now_str, expires_str)
-            triples.append((title, invite.invite_link, dest.get('description', '')))
-            buttons.append([InlineKeyboardButton(text=title, url=invite.invite_link)])
-        except TelegramAPIError as exc:
-            logging.warning(f"Failed to create link for {cid}: {exc}")
+        desc = dest.get('description', '')
+        # --- РЕЖИМЫ: static — используем ссылку, dynamic — генерируем ---
+        if INVITE_LINK_MODE == "static" and str(cid).startswith("http"):
+            # Просто используем существующую ссылку
+            triples.append((title, cid, desc))
+            buttons.append([InlineKeyboardButton(text=title, url=cid)])
+        elif INVITE_LINK_MODE == "dynamic":
+            try:
+                invite = await bot.create_chat_invite_link(
+                    chat_id=int(cid),
+                    member_limit=1,
+                    expire_date=expire_ts,
+                    name=f"Invite for {uid}",
+                    creates_join_request=False,
+                )
+                now_str = datetime.utcnow().isoformat()
+                expires_str = expire_dt.isoformat()
+                await save_invite_link(uid, int(cid), invite.invite_link, now_str, expires_str)
+                triples.append((title, invite.invite_link, desc))
+                buttons.append([InlineKeyboardButton(text=title, url=invite.invite_link)])
+            except TelegramAPIError as exc:
+                logging.warning(f"Failed to create link for {cid}: {exc}")
+        # fallback для неправильного значения/режима
+        else:
+            continue
 
     buttons.append([InlineKeyboardButton(text="🔄 Обновить ссылки", callback_data=f"refresh_{uid}")])
 
-    link_map = {title: link for title, link, _ in triples}
-    text = INVITE_TEXT_TEMPLATE.format(
-        ludochat_link=link_map.get("Лудочат", "#"),
-        viruchat_link=link_map.get("Выручат", "#")
+    # формируем блок ссылок и подставляем в шаблон
+    resources_lines = "\n".join(
+        f'<a href="{link}">{title}</a> — {desc}' for title, link, desc in triples
     )
+    text = INVITE_TEXT_TEMPLATE.format(resources_list=resources_lines)
     await bot.send_message(
         uid,
         text,
@@ -206,6 +221,21 @@ async def send_invite_links(uid: int):
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
+
+    try:
+        log_text = (
+            f"🔗 <b>Ссылки сгенерированы</b>\n"
+            f"Пользователь: <code>{uid}</code>\n"
+            + "\n".join([f"{title}: {link}" for title, link, _ in triples])
+        )
+        await bot.send_message(
+            LOG_CHANNEL_ID,
+            log_text,
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+    except Exception as log_exc:
+        logging.error(f"[LOG] Failed to send log to channel {LOG_CHANNEL_ID}: {log_exc}")
 
 @router.my_chat_member()
 async def on_my_chat_member(update: ChatMemberUpdated):
