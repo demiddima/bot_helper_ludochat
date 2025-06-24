@@ -1,3 +1,4 @@
+# config.py
 import os
 import sys
 from dotenv import load_dotenv
@@ -29,7 +30,8 @@ try:
     # INVITE link mode: static or dynamic
     INVITE_LINK_MODE = os.getenv("INVITE_LINK_MODE", "dynamic").strip()
 
-    # PRIVATE_DESTINATIONS: entries separated by semicolons, each "Title:chat_id:Description"
+    # PRIVATE_DESTINATIONS: entries separated by semicolons,
+    # each "Title:chat_id:Description[:check_id]"
     raw_dest = os.getenv("PRIVATE_DESTINATIONS", "").strip()
     # Strip surrounding quotes if present
     if (raw_dest.startswith('"') and raw_dest.endswith('"')) or (raw_dest.startswith("'") and raw_dest.endswith("'")):
@@ -41,31 +43,48 @@ try:
             item = item.strip()
             if not item:
                 continue
-            # split title and the rest by first colon
             title, sep, rest = item.partition(":")
             if not sep:
                 continue
-            # split rest into chat_id and description by last colon
-            idx = rest.rfind(":")
-            if idx == -1:
-                continue
-            chat_id = rest[:idx].strip()
-            description = rest[idx+1:].strip()
-            # support both URL strings (static) and numeric chat IDs (dynamic)
-            if chat_id.startswith("http"):
-                chat_id_value = chat_id
+
+            # Правильный разбор: rsplit по двум последним двоеточиям
+            parts = rest.rsplit(":", 2)
+            if len(parts) == 3:
+                chat_id_str, description, check_id_str = [p.strip() for p in parts]
+            elif len(parts) == 2:
+                chat_id_str, description = [p.strip() for p in parts]
+                check_id_str = None
             else:
-                chat_id_value = int(chat_id)
-            PRIVATE_DESTINATIONS.append({
+                chat_id_str = parts[0].strip()
+                description = ""
+                check_id_str = None
+
+            # parse chat_id (URL или int)
+            if chat_id_str.startswith("http"):
+                chat_id = chat_id_str
+            else:
+                chat_id = int(chat_id_str)
+
+            # parse optional check_id
+            if check_id_str:
+                try:
+                    check_id = int(check_id_str)
+                except ValueError:
+                    check_id = None
+            else:
+                check_id = None
+
+            dest = {
                 "title": title.strip(),
-                "chat_id": chat_id_value,
+                "chat_id": chat_id,
                 "description": description
-            })
+            }
+            if check_id is not None:
+                dest["check_id"] = check_id
 
-    # REST API config for DB microservice
+            PRIVATE_DESTINATIONS.append(dest)
+
     DB_API_URL = os.getenv("DB_API_URL", "http://db-api:8000")
-
-    # API key for DB service access
     API_KEY_VALUE = os.getenv("API_KEY_VALUE")
     if not API_KEY_VALUE:
         raise KeyError("API_KEY_VALUE is not set")

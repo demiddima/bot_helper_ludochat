@@ -49,12 +49,18 @@ async def save_invite_link(user_id, chat_id, invite_link, created_at, expires_at
     return await db_api_client.save_invite_link(user_id, chat_id, invite_link, created_at, expires_at)
 
 @retry(**RETRY)
+async def get_all_invite_links(user_id):
+    return await db_api_client.get_all_invite_links(user_id)
+
+@retry(**RETRY)
 async def get_invite_links(user_id):
     return await db_api_client.get_invite_links(user_id)
 
 @retry(**RETRY)
 async def delete_invite_links(user_id):
     await db_api_client.delete_invite_links(user_id)
+    
+    
 
 # ALGORITHM PROGRESS
 @retry(**RETRY)

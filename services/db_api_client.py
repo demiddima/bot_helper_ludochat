@@ -79,6 +79,12 @@ class DBApiClient:
         r = await self.client.get(f"/invite_links/{user_id}")
         r.raise_for_status()
         return r.json()
+    
+    async def get_all_invite_links(self, user_id):
+        # важно: путь /invite_links/all/{user_id}
+        r = await self.client.get(f"/invite_links/all/{user_id}")
+        r.raise_for_status()
+        return r.json()
 
     async def delete_invite_links(self, user_id: int):
         r = await self.client.delete(f"/invite_links/{user_id}")

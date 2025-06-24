@@ -27,15 +27,17 @@ async def generate_invite_links(bot, user, uid, PRIVATE_DESTINATIONS, verify_use
                 try:
                     await bot.send_message(
                         ERROR_LOG_CHANNEL_ID,
-                        f"Ошибка БД при обновлении invite_link пользователя {user.full_name} "
-                        f"(@{user.username or 'нет'}, ID: {uid}): {e}",
+                        f"Ошибка БД при обновлении invite_link пользователя {user.full_name}"
+                        f" (@{user.username or 'нет'}, ID: {uid}): {e}",
                         parse_mode=None,
                     )
                 except:
                     logging.warning(f"[ERROR LOG] Не удалось уведомить об ошибке invite_link {uid}")
 
-            links.append((title, invite.invite_link, desc))
-            buttons.append([{"text": title, "url": invite.invite_link}])
+            invite_link = invite.invite_link
+            links.append((title, invite_link, desc))
+            buttons.append([{"text": title, "url": invite_link}])
+
         except TelegramBadRequest as e:
             text_err = str(e).lower()
             if "limit" in text_err or "too many requests" in text_err or "invite links limit" in text_err:
@@ -61,8 +63,9 @@ async def generate_invite_links(bot, user, uid, PRIVATE_DESTINATIONS, verify_use
                                 name=f"Invite for {user.username or user.id}"
                             )
                             verify_user(uid, invite.invite_link)
-                            links.append((title, invite.invite_link, desc))
-                            buttons.append([{"text": title, "url": invite.invite_link}])
+                            invite_link = invite.invite_link
+                            links.append((title, invite_link, desc))
+                            buttons.append([{"text": title, "url": invite_link}])
                         except Exception as e2:
                             logging.warning(f"[FAIL] Не удалось создать invite после отзыва: {e2}")
                             try:
@@ -81,7 +84,7 @@ async def generate_invite_links(bot, user, uid, PRIVATE_DESTINATIONS, verify_use
                                 ERROR_LOG_CHANNEL_ID,
                                 f"Лимит invite-ссылок исчерпан в чате {chat_id}, "
                                 f"но старые ссылки не найдены. Пользователь {user.full_name} "
-                                f"(@{user.username or 'нет'}, ID: {uid}).",
+                                f"(@{user.username or 'нет'}, ID: {uid}).", 
                                 parse_mode=None,
                             )
                         except:

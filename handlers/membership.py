@@ -1,5 +1,5 @@
 # handlers/membership.py
-# commit: changed added_at to use .isoformat() for JSON serialization
+# commit: фикс — всегда сохраняем пользователя в users перед добавлением membership
 
 """Обработчик подписки/отписки пользователей в чатах и каналах из таблицы chats."""
 
@@ -9,7 +9,7 @@ from datetime import datetime
 from aiogram import Router
 from aiogram.types import ChatMemberUpdated
 
-from storage import get_chats, add_membership, remove_membership, upsert_chat
+from storage import get_chats, add_membership, remove_membership, upsert_chat, add_user
 from utils import log_and_report
 
 router = Router()
@@ -60,6 +60,14 @@ async def handle_membership_change(update: ChatMemberUpdated):
     status = update.new_chat_member.status
 
     try:
+        # --- добавляем пользователя в users (upsert) перед любым membership ---
+        user_data = {
+            "id": user.id,
+            "username": user.username or None,
+            "full_name": user.full_name or None,
+        }
+        await add_user(user_data)
+
         if status in ("member", "administrator", "creator"):
             await add_membership(user.id, chat_id)
             logging.info(f"[MEMBERSHIP] User {user.id} joined chat {chat_id}")
