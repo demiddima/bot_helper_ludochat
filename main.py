@@ -1,6 +1,10 @@
+# main.py
+# commit: changed added_at to use .isoformat() for JSON serialization
+
 import os
 import asyncio
 import logging
+from datetime import datetime
 from aiogram import Bot, Dispatcher, BaseMiddleware
 from aiohttp import web
 
@@ -49,7 +53,8 @@ async def main():
     await upsert_chat({
         "id": bot_info.id,
         "title": bot_info.username or "",
-        "type": "bot"
+        "type": "private",  
+        "added_at": datetime.utcnow().isoformat()  # ← теперь строка ISO
     })
 
     # 3) Register routers

@@ -66,10 +66,11 @@ async def on_startup():
     BOT_ID = me.id
     try:
         await upsert_chat({
-            "id": BOT_ID,
-            "title": me.username or "bot",
-            "type": "bot"
-        })
+                    "id": BOT_ID,
+                    "title": me.username or "bot",
+                    "type": "private",  # корректируем type согласно схеме ChatModel
+                    "added_at": datetime.utcnow().isoformat()  # добавляем обязательное поле
+                })
     except Exception as exc:
         await log_and_report(exc, "upsert_chat(bot)")
     cleanup_join_requests()
