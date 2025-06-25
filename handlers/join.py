@@ -14,7 +14,7 @@ from aiogram.types import (
 from aiogram.exceptions import TelegramAPIError
 from httpx import HTTPStatusError
 
-from config import PRIVATE_DESTINATIONS, LOG_CHANNEL_ID, ERROR_LOG_CHANNEL_ID
+from config import PRIVATE_DESTINATIONS, LOG_CHANNEL_ID
 from storage import (
     upsert_chat,
     add_user,
@@ -41,7 +41,8 @@ async def add_user_and_membership(user, chat_id):
 
 @router.startup()
 async def on_startup():
-    cleanup_join_requests()
+    # Запускаем очистку join_requests в фоне
+    asyncio.create_task(cleanup_join_requests())
     global BOT_ID
     bot = get_bot()
     me = await bot.get_me()
@@ -62,7 +63,14 @@ async def process_start(message: Message):
     parts = message.text.split()
     bot_username = (await bot.get_me()).username or ""
 
-    # «Я не бот» flow
+    # безопасная обёртка для трекинга
+    async def _safe_track(link_key: str):
+        try:
+            await track_link_visit(link_key)
+        except Exception as exc:
+            logging.error(f"[TRACK] track_link_visit failed for {link_key}: {exc}")
+
+    # "Я не бот" flow
     if len(parts) == 2 and parts[1].startswith("verify_"):
         orig_uid = int(parts[1].split("_", 1)[1])
         ts = join_requests.get(orig_uid)
@@ -70,12 +78,12 @@ async def process_start(message: Message):
             join_requests.pop(orig_uid, None)
             await message.reply(
                 "⏰ Время ожидания вышло. Отправьте /start ещё раз.",
-                reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton(
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
                         text="/start",
                         url=f"https://t.me/{bot_username}?start=start"
-                    )]]
-                )
+                    )]
+                ])
             )
             return
         join_requests.pop(orig_uid, None)
@@ -86,9 +94,9 @@ async def process_start(message: Message):
         await send_invite_links(orig_uid)
         return
 
-    # Трекинг клика по старой ссылке
-    if len(parts) == 2:
-        asyncio.create_task(track_link_visit(parts[1]))
+        # Трекинг клика по старой ссылке: пропускаем служебный аргумент "start"
+    if len(parts) == 2 and parts[1] not in ("start",) and not parts[1].startswith("verify_"):
+        asyncio.create_task(_safe_track(parts[1]))
 
     # Обычный /start
     uid = message.from_user.id
@@ -99,16 +107,18 @@ async def process_start(message: Message):
         await log_and_report(exc, f"add_user_on_start({uid})")
 
     confirm_link = f"https://t.me/{bot_username}?start=verify_{uid}"
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
             text="✅ Я согласен(а) и ознакомлен(а) со всем",
             url=confirm_link
-        )
-    ]])
+        )]
+    ])
     await bot.send_message(
-        uid, TERMS_MESSAGE,
+        uid,
+        TERMS_MESSAGE,
         reply_markup=kb,
-        parse_mode="HTML", disable_web_page_preview=True
+        parse_mode="HTML",
+        disable_web_page_preview=True
     )
 
 @router.callback_query(F.data.startswith("refresh_"))
@@ -121,22 +131,36 @@ async def on_refresh(query: CallbackQuery):
 
 async def send_invite_links(uid: int):
     bot = get_bot()
-    # Получаем все строки (expired + active)
     all_links = await get_all_invite_links(uid)
-    existing_map = {item["chat_id"]: item["invite_link"] for item in all_links}
+    now = datetime.now(timezone.utc)
 
-    triples = []
-    expire_ts = int(time.time()) + 3600
-    expire_dt = datetime.now(timezone.utc) + timedelta(hours=1)
-    buttons = []
+    triples: list[tuple[str, str, str]] = []
+    expires_ts = int(time.time()) + 3600
+    expires_dt_iso = (now + timedelta(hours=1)).isoformat()
+    buttons: list[list[InlineKeyboardButton]] = []
 
     for dest in PRIVATE_DESTINATIONS:
         cid = dest["chat_id"]
         title = dest.get("title", "Chat")
         desc = dest.get("description", "")
 
-        check_id = dest.get("check_id") if isinstance(dest.get("check_id"), int) else (cid if isinstance(cid, int) else None)
+        # Найти запись в БД
+        db_item = next((item for item in all_links if item["chat_id"] == cid), None)
+        link = db_item["invite_link"] if db_item else None
+
+        # Парсим expires_at и делаем timezone-aware
+        expires_at = None
+        if db_item and db_item.get("expires_at"):
+            try:
+                expires_at = datetime.fromisoformat(db_item["expires_at"])
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+            except Exception:
+                expires_at = None
+
+        # Проверка членства
         is_member = False
+        check_id = dest.get("check_id") if isinstance(dest.get("check_id"), int) else cid if isinstance(cid, int) else None
         if check_id is not None:
             try:
                 m = await bot.get_chat_member(check_id, uid)
@@ -145,61 +169,73 @@ async def send_invite_links(uid: int):
             except TelegramAPIError:
                 pass
 
-        # Есть строка? (есть invite_link для этой пары в базе)
-        if isinstance(cid, int) and cid in existing_map:
-            if is_member:
-                # Уже есть строка в базе и пользователь подписан — отдаем старую ссылку
-                link = existing_map[cid]
-            else:
-                # Уже есть строка, но не подписан — НЕ создаём и НЕ сохраняем заново (чтобы не было дубликата)
-                # Можно отправить ту же ссылку, либо вообще пропустить (зависит от бизнес-логики)
-                link = existing_map[cid]
-        else:
-            # Нет строки — создаём новую ссылку
+        # Решаем, нужно ли создавать новую ссылку
+        create_new = False
+        if not link:
+            create_new = True
+        elif not is_member and expires_at and expires_at < now:
+            create_new = True
+
+        if create_new:
             if isinstance(cid, str) and cid.startswith("http"):
                 link = cid
             else:
                 invite = await bot.create_chat_invite_link(
                     chat_id=int(cid),
                     member_limit=1,
-                    expire_date=expire_ts,
+                    expire_date=expires_ts,
                     name=f"Invite for {uid}",
                     creates_join_request=False,
                 )
                 link = invite.invite_link
-                # Сохраняем только если строки нет!
+
+            # Подготовка числового chat_id для сохранения
+            try:
+                chat_id_for_db = int(cid)
+            except (TypeError, ValueError):
+                chat_id_for_db = None
+
+            # Сохраняем только если chat_id корректен
+            if chat_id_for_db is not None:
                 try:
                     await save_invite_link(
                         uid,
-                        cid,
+                        chat_id_for_db,
                         link,
-                        datetime.utcnow().isoformat(),
-                        expire_dt.isoformat()
+                        datetime.utcnow().replace(tzinfo=timezone.utc).isoformat(),
+                        expires_dt_iso
                     )
                 except HTTPStatusError:
-                    # дубликат — пропускаем (но по идее сюда не должны попасть)
                     pass
                 except Exception as exc:
-                    logging.warning(f"[DB] Не удалось сохранить invite_link для {cid}: {exc}")
+                    logging.warning(f"[DB] Failed to save invite_link for chat_id={chat_id_for_db}: {exc}")
 
         triples.append((title, link, desc))
         buttons.append([InlineKeyboardButton(text=title, url=link)])
 
-    buttons.append([InlineKeyboardButton(text="🔄 Обновить ссылки", callback_data=f"refresh_{uid}")])
+    # Кнопка обновления
+    buttons.append([
+        InlineKeyboardButton(text="🔄 Обновить ссылки", callback_data=f"refresh_{uid}")
+    ])
+
     resources = "\n".join(f'<a href="{l}">{t}</a> — {d}' for t, l, d in triples)
     text = INVITE_TEXT_TEMPLATE.format(resources_list=resources)
 
     await bot.send_message(
-        uid, text,
+        uid,
+        text,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-        parse_mode="HTML", disable_web_page_preview=True
+        parse_mode="HTML",
+        disable_web_page_preview=True
     )
     await bot.send_message(
-        uid, MORE_INFO,
-        parse_mode="HTML", disable_web_page_preview=True
+        uid,
+        MORE_INFO,
+        parse_mode="HTML",
+        disable_web_page_preview=True
     )
 
-    # Лог
+    # Логирование
     try:
         log_text = "🔗 <b>Ссылки сгенерированы</b>\n"
         log_text += f"Пользователь: <code>{uid}</code>\n"
@@ -209,6 +245,8 @@ async def send_invite_links(uid: int):
         logging.error(f"[LOG] {exc}")
 
 
+        
+        
 @router.my_chat_member()
 async def on_my_chat_member(update: ChatMemberUpdated):
     status = update.new_chat_member.status
