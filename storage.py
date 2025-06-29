@@ -21,6 +21,16 @@ async def update_user(user_id, user_data):
 async def delete_user(user_id):
     await db_api_client.delete_user(user_id)
 
+@retry(**RETRY)
+async def has_terms_accepted(user_id: int) -> bool:
+    user = await get_user(user_id)
+    return bool(user.get("terms_accepted"))
+
+@retry(**RETRY)
+async def set_terms_accepted(user_id: int) -> None:
+    # Обновляем только поле terms_accepted
+    await update_user(user_id, {"terms_accepted": True})
+
 # CHATS
 @retry(**RETRY)
 async def upsert_chat(chat_data):
@@ -59,8 +69,6 @@ async def get_invite_links(user_id):
 @retry(**RETRY)
 async def delete_invite_links(user_id):
     await db_api_client.delete_invite_links(user_id)
-    
-    
 
 # ALGORITHM PROGRESS
 @retry(**RETRY)
@@ -82,7 +90,7 @@ async def set_basic(user_id, completed):
 @retry(**RETRY)
 async def set_advanced(user_id, completed):
     await db_api_client.set_advanced(user_id, completed)
-    
+
 @retry(**RETRY)
 async def track_link_visit(link_key: str):
     return await db_api_client.track_link_visit(link_key)
