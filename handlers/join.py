@@ -23,8 +23,8 @@ from storage import (
     save_invite_link,
     get_all_invite_links,
     track_link_visit,
-    has_terms_accepted, 
-    set_terms_accepted
+    has_terms_accepted as has_user_accepted,
+    set_terms_accepted as set_user_accepted
 )
 from utils import log_and_report, join_requests, cleanup_join_requests, get_bot
 from messages import TERMS_MESSAGE, INVITE_TEXT_TEMPLATE, MORE_INFO
@@ -66,17 +66,6 @@ async def process_start(message: Message):
     bot_username = (await bot.get_me()).username or ""
     uid = message.from_user.id
 
-    # если пользователь уже подтверждал — пропускаем TERMS и сразу выдаём ссылки
-    try:
-        if await has_terms_accepted(uid):
-            # трекинг старой ссылки, если есть
-            if len(parts) == 2 and parts[1] not in ("start",) and not parts[1].startswith("verify_"):
-                asyncio.create_task(_safe_track(parts[1]))
-            await send_invite_links(uid)
-            return
-    except Exception as exc:
-        logging.error(f"[STORAGE] has_user_accepted failed for {uid}: {exc}")
-
     # безопасная обёртка для трекинга
     async def _safe_track(link_key: str):
         try:
@@ -84,38 +73,56 @@ async def process_start(message: Message):
         except Exception as exc:
             logging.error(f"[TRACK] track_link_visit failed for {link_key}: {exc}")
 
-    # "Я не бот" flow: кнопка из TERMS
+    # 1) Если пользователь уже подтвердил — сразу выдаём ссылки
+    if await has_terms_accepted(uid):
+        # трекинг клика, если есть параметр
+        if len(parts) == 2 and parts[1] not in ("start",) and not parts[1].startswith("verify_"):
+            asyncio.create_task(_safe_track(parts[1]))
+        try:
+            await add_user_and_membership(message.from_user, BOT_ID)
+        except Exception as exc:
+            await log_and_report(exc, f"add_user_on_start({uid})")
+        await send_invite_links(uid)
+        return
+
+    # 2) Flow "Я не бот" — пользователь нажал кнопку “Я согласен…”
     if len(parts) == 2 and parts[1].startswith("verify_"):
         orig_uid = int(parts[1].split("_", 1)[1])
         ts = join_requests.get(orig_uid)
+        # таймаут 5 минут
         if ts is None or time.time() - ts > 300:
             join_requests.pop(orig_uid, None)
             await message.reply(
                 "⏰ Время ожидания вышло. Отправьте /start ещё раз.",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
                         text="/start",
                         url=f"https://t.me/{bot_username}?start=start"
-                    )
-                ]])
+                    )]
+                ])
             )
             return
 
         join_requests.pop(orig_uid, None)
         try:
             await add_user_and_membership(message.from_user, BOT_ID)
-            # ставим флаг, что пользователь принял TERMS
-            await set_terms_accepted(orig_uid)
         except Exception as exc:
-            await log_and_report(exc, f"accept_terms({orig_uid})")
+            await log_and_report(exc, f"add_user({orig_uid})")
+
+        # ставим флаг, что согласился
+        try:
+            await set_terms_accepted(orig_uid)
+        except Exception:
+            logging.exception(f"[STORAGE] Не смогли записать terms_accepted для {orig_uid}")
+
         await send_invite_links(orig_uid)
         return
 
-    # Трекинг клика по старой ссылке: пропускаем служебный аргумент "start"
+    # 3) Трекинг клика по старой ссылке (любая прочая метка)
     if len(parts) == 2 and parts[1] not in ("start",) and not parts[1].startswith("verify_"):
         asyncio.create_task(_safe_track(parts[1]))
 
-    # Обычный /start — показываем TERMS
+    # 4) Обычный /start — показываем TERMS
     join_requests[uid] = time.time()
     try:
         await add_user_and_membership(message.from_user, BOT_ID)
@@ -123,12 +130,12 @@ async def process_start(message: Message):
         await log_and_report(exc, f"add_user_on_start({uid})")
 
     confirm_link = f"https://t.me/{bot_username}?start=verify_{uid}"
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
             text="✅ Я согласен(а) и ознакомлен(а) со всем",
             url=confirm_link
-        )
-    ]])
+        )]
+    ])
     await bot.send_message(
         uid,
         TERMS_MESSAGE,

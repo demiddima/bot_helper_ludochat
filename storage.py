@@ -23,13 +23,35 @@ async def delete_user(user_id):
 
 @retry(**RETRY)
 async def has_terms_accepted(user_id: int) -> bool:
-    user = await get_user(user_id)
-    return bool(user.get("terms_accepted"))
+    """
+    Проверяет в БД флаг terms_accepted у пользователя.
+    """
+    try:
+        user = await get_user(user_id)
+        return bool(user.get("terms_accepted", False))
+    except Exception as exc:
+        logging.error(f"[STORAGE] has_terms_accepted failed for {user_id}: {exc}")
+        raise
 
 @retry(**RETRY)
 async def set_terms_accepted(user_id: int) -> None:
-    # Обновляем только поле terms_accepted
-    await update_user(user_id, {"terms_accepted": True})
+    """
+    Помечает в БД, что пользователь согласился с условиями.
+    Чтобы избежать 422, подтягиваем всю модель и шлём её целиком.
+    """
+    # сначала получаем текущие данные
+    user = await get_user(user_id)
+    payload = {
+        "id":             user_id,
+        "username":       user.get("username"),
+        "full_name":      user.get("full_name"),
+        "terms_accepted": True,
+    }
+    try:
+        await update_user(user_id, payload)
+    except Exception as exc:
+        logging.error(f"[STORAGE] set_terms_accepted failed for {user_id}: {exc}")
+        raise
 
 # CHATS
 @retry(**RETRY)
