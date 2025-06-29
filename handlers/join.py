@@ -24,7 +24,7 @@ from storage import (
     get_all_invite_links,
     track_link_visit,
     has_terms_accepted as has_user_accepted,
-    set_terms_accepted as set_user_accepted
+    set_terms_accepted as set_user_accepted,
 )
 from utils import log_and_report, join_requests, cleanup_join_requests, get_bot
 from messages import TERMS_MESSAGE, INVITE_TEXT_TEMPLATE, MORE_INFO
@@ -74,7 +74,7 @@ async def process_start(message: Message):
             logging.error(f"[TRACK] track_link_visit failed for {link_key}: {exc}")
 
     # 1) Если пользователь уже подтвердил — сразу выдаём ссылки
-    if await has_terms_accepted(uid):
+    if await has_user_accepted(uid):
         # трекинг клика, если есть параметр
         if len(parts) == 2 and parts[1] not in ("start",) and not parts[1].startswith("verify_"):
             asyncio.create_task(_safe_track(parts[1]))
@@ -111,7 +111,7 @@ async def process_start(message: Message):
 
         # ставим флаг, что согласился
         try:
-            await set_terms_accepted(orig_uid)
+            await set_user_accepted(orig_uid)
         except Exception:
             logging.exception(f"[STORAGE] Не смогли записать terms_accepted для {orig_uid}")
 
@@ -143,6 +143,7 @@ async def process_start(message: Message):
         parse_mode="HTML",
         disable_web_page_preview=True
     )
+
 
 @router.callback_query(F.data.startswith("refresh_"))
 async def on_refresh(query: CallbackQuery):
