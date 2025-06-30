@@ -1,23 +1,36 @@
 import logging
 import sys
 import httpx
+import http.client
 import html
 import config
+import aiohttp.http_exceptions
 
 class IgnoreBadStatusLineFilter(logging.Filter):
     """
     Игнорирует:
-    - ошибки BadStatusLine (TLS handshake на HTTP-порте)
-    - любые исключения, где текст str(exc) содержит 'Invalid method encountered'
+    - ошибки TLS handshake на HTTP-порте (BadStatusLine из http.client)
+    - ошибки RemoteProtocolError из httpx
+    - любые HTTP-просчетки aiohttp (HttpProcessingError, BadHttpMessage, BadStatusLine)
+    - любые исключения, где текст содержит 'Invalid method encountered'
     """
     def filter(self, record: logging.LogRecord) -> bool:
-        # сначала смотрим, есть ли exception
         exc = record.exc_info[1] if record.exc_info else None
         if exc:
-            # отфильтруем по имени класса
-            if exc.__class__.__name__ == "BadStatusLine":
+            # http.client.BadStatusLine
+            if isinstance(exc, http.client.BadStatusLine):
                 return False
-            # отфильтруем по тексту самого исключения
+            # httpx.RemoteProtocolError
+            if isinstance(exc, httpx.RemoteProtocolError):
+                return False
+            # aiohttp HTTP errors
+            if isinstance(exc, aiohttp.http_exceptions.HttpProcessingError):
+                return False
+            # BadHttpMessage и BadStatusLine в aiohttp
+            from aiohttp.http_exceptions import BadHttpMessage, BadStatusLine as AioBadStatusLine
+            if isinstance(exc, (BadHttpMessage, AioBadStatusLine)):
+                return False
+            # По тексту
             if "Invalid method encountered" in str(exc):
                 return False
         return True
@@ -34,8 +47,20 @@ class TelegramHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         if not self.token or not self.chat_id:
             return
+
+        # Пропускаем нежелательные исключения
+        if record.exc_info:
+            exc_type = record.exc_info[0]
+            if exc_type and issubclass(exc_type, (
+                http.client.BadStatusLine,
+                httpx.RemoteProtocolError,
+                aiohttp.http_exceptions.HttpProcessingError
+            )):
+                return
+
         text = self.format(record)
         payload = "<pre>" + html.escape(text) + "</pre>"
+
         try:
             resp = httpx.post(
                 f"https://api.telegram.org/bot{self.token}/sendMessage",
