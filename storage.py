@@ -23,7 +23,7 @@ async def get_user(user_id: int) -> dict:
     try:
         return await db_api_client.get_user(user_id)
     except HTTPStatusError as exc:
-        # если пользователей нет — возвращаем пустой dict
+        # если пользователя нет — возвращаем пустой dict
         if exc.response.status_code == 404:
             return {}
         raise
@@ -45,12 +45,8 @@ async def has_terms_accepted(user_id: int) -> bool:
 
 async def set_terms_accepted(user_id: int) -> None:
     try:
-        # Получаем текущие данные пользователя (или пустой словарь)
-        user = await get_user(user_id) or {}
-        # Обновляем флаг
-        user["terms_accepted"] = True
-        # Делаем upsert полной записи (чтобы не валиться на отсутствии id/username/full_name)
-        await add_user(user)
+        # Обновляем только флаг terms_accepted
+        await update_user(user_id, {"terms_accepted": True})
     except Exception as exc:
         logging.error(f"[STORAGE] set_terms_accepted failed for {user_id}: {exc}")
 
