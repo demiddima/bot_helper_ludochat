@@ -6,16 +6,20 @@ import config
 
 class IgnoreBadStatusLineFilter(logging.Filter):
     """
-    Игнорирует ошибки BadStatusLine (TLS handshake на HTTP-порте)
-    и сообщения с текстом 'Invalid method encountered'.
+    Игнорирует:
+    - ошибки BadStatusLine (TLS handshake на HTTP-порте)
+    - любые исключения, где текст str(exc) содержит 'Invalid method encountered'
     """
     def filter(self, record: logging.LogRecord) -> bool:
+        # сначала смотрим, есть ли exception
         exc = record.exc_info[1] if record.exc_info else None
-        if exc and exc.__class__.__name__ == "BadStatusLine":
-            return False
-        msg = record.getMessage()
-        if "Invalid method encountered" in msg:
-            return False
+        if exc:
+            # отфильтруем по имени класса
+            if exc.__class__.__name__ == "BadStatusLine":
+                return False
+            # отфильтруем по тексту самого исключения
+            if "Invalid method encountered" in str(exc):
+                return False
         return True
 
 class TelegramHandler(logging.Handler):
@@ -57,7 +61,7 @@ def configure_logging() -> None:
     ch.setFormatter(fmt)
     root.addHandler(ch)
 
-    # Telegram — ERROR+
+    # Telegram — ERROR+, с фильтром IgnoreBadStatusLineFilter
     th = TelegramHandler()
     th.setFormatter(fmt)
     th.addFilter(IgnoreBadStatusLineFilter())
