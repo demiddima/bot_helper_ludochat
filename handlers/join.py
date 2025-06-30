@@ -75,13 +75,14 @@ async def process_start(message: Message):
 
     # 1) Если пользователь уже подтвердил — сразу выдаём ссылки
     if await has_user_accepted(uid):
-        # трекинг клика, если есть параметр
+    # трекинг клика, если есть параметр
         if len(parts) == 2 and parts[1] not in ("start",) and not parts[1].startswith("verify_"):
             asyncio.create_task(_safe_track(parts[1]))
         try:
-            await add_user_and_membership(message.from_user, BOT_ID)
+            # только добавляем membership, не трогаем саму запись user
+            await add_membership(uid, BOT_ID)
         except Exception as exc:
-            await log_and_report(exc, f"add_user_on_start({uid})")
+            await log_and_report(exc, f"add_membership_on_start({uid})")
         await send_invite_links(uid)
         return
 
