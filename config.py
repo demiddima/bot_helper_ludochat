@@ -1,4 +1,5 @@
 # config.py
+
 import os
 import sys
 from dotenv import load_dotenv
@@ -30,9 +31,14 @@ try:
     # Канал для обычных уведомлений (если используется)
     LOG_CHANNEL_ID = get_env_int("LOG_CHANNEL_ID")
 
-    # Списки админов
+    # Списки админов для команд администрирования чатов
     raw_admin = os.getenv("ADMIN_CHAT_IDS", "")
     ADMIN_CHAT_IDS = [int(x) for x in raw_admin.split(";") if x]
+
+    # ID пользователей, которым разрешено менять MORE_INFO
+    raw_admin_user = os.getenv("ID_ADMIN_USER", "")
+    # Приводим к множеству целых для быстрого in-проверки
+    ID_ADMIN_USER = {int(x) for x in raw_admin_user.split(";") if x}
 
     # Режимы приглашений
     INVITE_LINK_MODE = os.getenv("INVITE_LINK_MODE", "dynamic").strip()

@@ -27,7 +27,7 @@ from storage import (
     set_terms_accepted as set_user_accepted,
 )
 from utils import log_and_report, join_requests, cleanup_join_requests, get_bot
-from messages import TERMS_MESSAGE, INVITE_TEXT_TEMPLATE, MORE_INFO
+from messages import TERMS_MESSAGE, INVITE_TEXT_TEMPLATE, get_more_info
 
 router = Router()
 BOT_ID: int | None = None
@@ -255,7 +255,7 @@ async def send_invite_links(uid: int):
     )
     await bot.send_message(
         uid,
-        MORE_INFO,
+        get_more_info(),
         parse_mode="HTML",
         disable_web_page_preview=True
     )
