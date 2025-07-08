@@ -5,13 +5,14 @@ import http.client
 import html
 import config
 import aiohttp.http_exceptions
+from aiohttp.http_exceptions import BadHttpMessage, BadStatusLine as AioBadStatusLine
 
 class IgnoreBadStatusLineFilter(logging.Filter):
     """
     Игнорирует:
     - ошибки TLS handshake на HTTP-порте (BadStatusLine из http.client)
     - ошибки RemoteProtocolError из httpx
-    - любые HTTP-просчетки aiohttp (HttpProcessingError, BadHttpMessage, BadStatusLine)
+    - любые HTTP-просчеты aiohttp (HttpProcessingError, BadHttpMessage, BadStatusLine)
     - любые исключения, где текст содержит 'Invalid method encountered'
     """
     def filter(self, record: logging.LogRecord) -> bool:
@@ -27,7 +28,6 @@ class IgnoreBadStatusLineFilter(logging.Filter):
             if isinstance(exc, aiohttp.http_exceptions.HttpProcessingError):
                 return False
             # BadHttpMessage и BadStatusLine в aiohttp
-            from aiohttp.http_exceptions import BadHttpMessage, BadStatusLine as AioBadStatusLine
             if isinstance(exc, (BadHttpMessage, AioBadStatusLine)):
                 return False
             # По тексту
@@ -91,6 +91,11 @@ def configure_logging() -> None:
     th.setFormatter(fmt)
     th.addFilter(IgnoreBadStatusLineFilter())
     root.addHandler(th)
+
+    # Подавить BadStatusLine-ошибки от aiohttp.server в консоли
+    server_logger = logging.getLogger("aiohttp.server")
+    server_logger.setLevel(logging.WARNING)
+    server_logger.addFilter(IgnoreBadStatusLineFilter())
 
 # Инициализируем логирование при импорте
 configure_logging()
