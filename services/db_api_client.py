@@ -1,6 +1,7 @@
 import httpx
 from typing import Optional, Any, List
 from config import DB_API_URL, API_KEY_VALUE
+import logging
 
 class DBApiClient:
     def __init__(self, api_url: Optional[str] = None):
@@ -64,27 +65,52 @@ class DBApiClient:
     async def save_invite_link(
         self, user_id: int, chat_id: int, invite_link: str, created_at: str, expires_at: str
     ) -> dict:
-        payload = {
-            "user_id": user_id,
-            "chat_id": chat_id,
-            "invite_link": invite_link,
-            "created_at": created_at,
-            "expires_at": expires_at,
-        }
-        r = await self.client.post("/invite_links/", json=payload)
-        r.raise_for_status()
-        return r.json()
+        logging.info(f"[INFO] Пытаемся сохранить ссылку: user_id={user_id}, chat_id={chat_id}, invite_link={invite_link}, created_at={created_at}, expires_at={expires_at}")
+        try:
+            # Формируем запрос
+            payload = {
+                "user_id": user_id,
+                "chat_id": chat_id,
+                "invite_link": invite_link,
+                "created_at": created_at,
+                "expires_at": expires_at,
+            }
+            
+            # Логируем перед отправкой запроса
+            logging.info(f"[INFO] Отправляем запрос на сохранение ссылки с данными: {payload}")
+            
+            # Отправляем POST-запрос на сервер
+            r = await self.client.post("/invite_links/", json=payload)
+            r.raise_for_status()  # Проверяем на ошибки HTTP статуса
+            logging.info(f"[INFO] Ссылка успешно сохранена для user_id={user_id}. Ответ от сервера: {r.status_code}")
 
-    async def get_invite_links(self, user_id: int) -> list:
-        r = await self.client.get(f"/invite_links/{user_id}")
-        r.raise_for_status()
-        return r.json()
+            return r.json()
+        except httpx.HTTPStatusError as e:
+            logging.error(f"[ERROR] Ошибка при сохранении ссылки для {user_id}: {e}")
+            raise
+        except Exception as e:
+            logging.error(f"[ERROR] Неизвестная ошибка при сохранении ссылки для {user_id}: {e}")
+            raise
     
     async def get_all_invite_links(self, user_id):
-        # важно: путь /invite_links/all/{user_id}
-        r = await self.client.get(f"/invite_links/all/{user_id}")
-        r.raise_for_status()
-        return r.json()
+    # Логируем начало выполнения запроса
+        logging.info(f"[INFO] Запрос всех invite-ссылок для user_id={user_id}")
+        
+        try:
+            r = await self.client.get(f"/invite_links/all/{user_id}")
+            r.raise_for_status()  # Если ошибка 4xx или 5xx, вызовет исключение
+            links = r.json()
+            
+            # Логируем полученные данные
+            logging.info(f"[INFO] Получены ссылки для user_id={user_id}: {links}")
+            
+            return links
+        except httpx.HTTPStatusError as e:
+            logging.error(f"[ERROR] Ошибка при получении ссылок для user_id={user_id}: {e}")
+            raise
+        except Exception as e:
+            logging.error(f"[ERROR] Неизвестная ошибка при получении ссылок для user_id={user_id}: {e}")
+            raise
 
     async def delete_invite_links(self, user_id: int):
         r = await self.client.delete(f"/invite_links/{user_id}")

@@ -1,10 +1,9 @@
-# main.py
-import logger                  # настраивает консоль INFO+ и Telegram ERROR+
-import os                      # для getenv
+import os
 import sys
 import asyncio
 import logging
 import html                    # для html.escape
+from utils import get_bot
 
 from datetime import datetime
 from aiohttp import web
@@ -13,11 +12,11 @@ from aiogram.enums.parse_mode import ParseMode
 
 import config
 from storage import upsert_chat
-from handlers.join import router as join_router
-from handlers.commands import router as commands_router
-from handlers.membership import router as membership_router
-import services.invite_service  # noqa: F401
+from handlers.join import router as join_router         # :contentReference[oaicite:0]{index=0}
+from handlers.commands import router as commands_router # :contentReference[oaicite:1]{index=1}
 
+# Флаг для проверки повторных логов
+already_logged = set()
 
 # 1) ловим uncaught исключения в sync-коде
 def _excepthook(exc_type, exc_value, tb):
@@ -29,66 +28,95 @@ sys.excepthook = _excepthook
 # 2) ловим исключения в asyncio-тасках
 def _async_exception_handler(loop, context):
     logging.getLogger(__name__).error(
-        "Unhandled asyncio error",
-        exc_info=context.get("exception")
+        "Unhandled asyncio error", exc_info=context.get("exception")
     )
 asyncio.get_event_loop().set_exception_handler(_async_exception_handler)
 
-# 3) глобальный error handler для апдейтов
-async def global_error_handler(update, exception):
+async def global_error_handler(*args) -> bool:
+    """
+    Универсальный обработчик ошибок:
+    - Поддерживает старую (exception) и новую (update, exception) сигнатуры.
+    - Делит слишком длинные сообщения на части ≤4096 символов.
+    """
+    # Разбираем аргументы
+    if len(args) == 2:
+        update, exception = args
+    elif len(args) == 1:
+        update = None
+        exception = args[0]
+    else:
+        return True
+
     log = logging.getLogger(__name__)
-    log.exception(f"Error handling update: {exception}")
+    log.exception(f"Unhandled exception: {exception}", exc_info=True)
 
-    # коротко отправляем в Telegram-канал ошибок
-    try:
-        bot = Bot.get_current()
-        text = f"❗️<b>Ошибка:</b>\n<pre>{html.escape(str(exception))}</pre>"
-        await bot.send_message(
-            config.ERROR_LOG_CHANNEL_ID,
-            text,
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True
-        )
-    except Exception:
-        log.error("Failed to send error message to ERROR_LOG_CHANNEL_ID")
+    # Текст для Telegram-канала
+    error_text = f"❗️<b>Ошибка:</b>\n<pre>{html.escape(str(exception))}</pre>"
+    bot = get_bot()
+    max_len = 4096
 
-    # уведомляем пользователя, если это сообщение
-    if getattr(update, "message", None):
+    # Отправляем частями
+    for start in range(0, len(error_text), max_len):
+        chunk = error_text[start:start + max_len]
         try:
-            await update.message.answer("Произошла ошибка, попробуйте позже.")
-        except Exception:
-            log.error("Failed to notify user about error")
+            await bot.send_message(
+                config.ERROR_LOG_CHANNEL_ID,
+                chunk,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True
+            )
+        except Exception as send_exc:
+            log.error(f"Failed to send error chunk: {send_exc}")
 
-    return True  # отмечаем, что ошибка обработана
+    # Оповестить пользователя (если возможно)
+    if update and hasattr(update, "message") and update.message:
+        try:
+            await update.message.answer("Произошла внутренняя ошибка, попробуйте позже.")
+        except Exception as user_exc:
+            log.error(f"Failed to notify user: {user_exc}")
 
+    return True
 
 async def main():
     log = logging.getLogger(__name__)
-    log.info("Запускаем бота")
 
-    # инициализация бота и диспетчера
+    # Логируем только один раз
+    if "Запускаем бота" not in already_logged:
+        log.info("Запускаем бота")
+        already_logged.add("Запускаем бота")
+
+    # Инициализация бота и других компонентов
     bot = Bot(token=config.BOT_TOKEN, parse_mode=ParseMode.HTML)
     dp = Dispatcher()
 
-    # регистрируем глобальный error handler
+    # Регистрируем обработчики
     dp.errors.register(global_error_handler)
 
-    # регистрируем роутеры
+    # Подключаем роутеры
     dp.include_router(join_router)
     dp.include_router(commands_router)
-    dp.include_router(membership_router)
 
-    # регистрируем бота в БД
+    # Регистрация бота в БД
     me = await bot.get_me()
+    config.BOT_ID = me.id
     await upsert_chat({
         "id": me.id,
         "title": me.username or "",
         "type": "private",
         "added_at": datetime.utcnow().isoformat()
     })
-    log.info(f"Registered bot chat: {me.id}")
+    
+    if f"Registered bot chat: {me.id}" not in already_logged:
+        log.info(f"Registered bot chat: {me.id}")
+        already_logged.add(f"Registered bot chat: {me.id}")
 
-    # запускаем HTTP-сервер для health-check
+    # Инициализация порта для сервера
+    port = int(os.getenv("PORT", "8080"))  # Если порт не задан, по умолчанию 8080
+
+    # Запуск сервера
+    log.info(f"HTTP health-check server started on port {port}")
+
+    # Создание и запуск HTTP-сервера
     app = web.Application()
     async def health(request):
         return web.Response(text="OK")
@@ -96,19 +124,15 @@ async def main():
 
     runner = web.AppRunner(app)
     await runner.setup()
-    port = int(os.getenv("PORT", "8080"))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    log.info(f"HTTP health-check server started on port {port}")
 
-    # старт polling
+    # Запуск polling
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
-
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logging.getLogger(__name__).warning("Shutting down...")
-    # все прочие ошибки уйдут в sys.excepthook

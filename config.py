@@ -1,8 +1,7 @@
-# config.py
-
 import os
 import sys
 from dotenv import load_dotenv
+import logging
 
 # Load environment variables from .env file
 load_dotenv()
@@ -37,7 +36,6 @@ try:
 
     # ID пользователей, которым разрешено менять MORE_INFO
     raw_admin_user = os.getenv("ID_ADMIN_USER", "")
-    # Приводим к множеству целых для быстрого in-проверки
     ID_ADMIN_USER = {int(x) for x in raw_admin_user.split(";") if x}
 
     # Режимы приглашений
@@ -50,49 +48,47 @@ try:
 
     PRIVATE_DESTINATIONS = []
     if raw_dest:
-        for item in raw_dest.split(";"):
+        for item in raw_dest.split(";"):  # Используем точку с запятой для разделения
             item = item.strip()
             if not item:
                 continue
-            title, sep, rest = item.partition(":")
-            if not sep:
-                continue
+            parts = item.split(",", 2)  # Делим по запятой на 3 части
 
-            parts = rest.rsplit(":", 2)
-            if len(parts) == 3:
-                chat_id_str, description, check_id_str = [p.strip() for p in parts]
-            elif len(parts) == 2:
-                chat_id_str, description = [p.strip() for p in parts]
-                check_id_str = None
-            else:
-                chat_id_str = parts[0].strip()
-                description = ""
-                check_id_str = None
+            # Первая часть - это title
+            title = parts[0].strip()
 
-            # Преобразуем chat_id
+            # Вторая часть - это chat_id или URL
+            chat_id_str = parts[1].strip()
+
+            # Третья часть - это описание или check_id
+            description_or_check_id = parts[2].strip() if len(parts) > 2 else ""
+
+            # Если chat_id это URL, то не пытаемся преобразовывать его в число
             if chat_id_str.startswith("http"):
                 chat_id = chat_id_str
+                description = ""
             else:
-                chat_id = int(chat_id_str)
-
-            # Необязательный check_id
-            if check_id_str:
                 try:
-                    check_id = int(check_id_str)
+                    chat_id = int(chat_id_str)
+                    description = description_or_check_id
                 except ValueError:
-                    check_id = None
-            else:
-                check_id = None
+                    chat_id = chat_id_str  # В случае ошибки сохраняем как строку
+                    description = description_or_check_id
 
+            # Формируем запись для PRIVATE_DESTINATIONS
             dest = {
                 "title": title.strip(),
                 "chat_id": chat_id,
                 "description": description
             }
-            if check_id is not None:
-                dest["check_id"] = check_id
 
             PRIVATE_DESTINATIONS.append(dest)
+
+    # Настроим логирование: поменяли на WARNING, чтобы избежать лишних логов
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    
+    # Логируем значение PRIVATE_DESTINATIONS для проверки только при уровне ERROR или WARNING
+    logging.warning(f"PRIVATE_DESTINATIONS: {PRIVATE_DESTINATIONS}")
 
     # URL базы данных (сервис)
     DB_API_URL = os.getenv("DB_API_URL", "http://db-api:8000")
@@ -101,6 +97,9 @@ try:
     API_KEY_VALUE = os.getenv("API_KEY_VALUE")
     if not API_KEY_VALUE:
         raise KeyError("API_KEY_VALUE is not set")
+
+    # Инициализация BOT_ID
+    BOT_ID = None  # Инициализация переменной BOT_ID
 
 except Exception as e:
     print(f"[CONFIG ERROR] {e}", file=sys.stderr)
