@@ -1,34 +1,59 @@
-# handlers/commands/common.py
+# common.py
+# Корпоративный стиль логирования: [function] – user_id=… – описание, безопасная обработка ошибок
 
 import logging
-
 from aiogram import Router, F
 from aiogram.types import Message
 from aiogram.filters import Command
+from aiogram.enums import ParseMode
 
-# Импортируем новую функцию из модуля resources
 from handlers.join.resources import send_resources_message
 
 router = Router(name="common")
 
-@router.message(Command("update_links"), F.chat.type == "private")
-async def cmd_update_links(message: Message):
-    """
-    Обновляет индивидуальные ресурсы (1 час, по PRIVATE_DESTINATIONS).
-    """
-    await message.answer("Обновляю ваши ресурсы…")
+@router.message(Command("update_links"))
+async def update_links(message: Message):
+    user = message.from_user
+    uid = user.id
+    func_name = "update_links"
     try:
-        # Раньше вызывали send_invite_links, теперь — send_resources_message
-        await send_resources_message(message.from_user.id)
+        await send_resources_message(
+            message.bot,
+            user,
+            uid,
+            refresh=True,  # Указываем, что нужно перегенерировать ссылки
+        )
+        logging.info(
+            f"[{func_name}] – user_id={uid} – Успешно обновлены ссылки.",
+            extra={"user_id": uid}
+        )
     except Exception as e:
-        logging.error(f"[UPDATE_LINKS] {e}")
-        await message.answer("Не удалось обновить ресурсы. Попробуйте позже.")
+        logging.error(
+            f"[{func_name}] – user_id={uid} – Ошибка при обновлении ссылок: {e}",
+            extra={"user_id": uid}
+        )
+        try:
+            await message.answer("Произошла ошибка при обновлении ссылок.", parse_mode=ParseMode.HTML)
+        except Exception as ee:
+            logging.error(
+                f"[{func_name}] – user_id={uid} – Не удалось уведомить пользователя об ошибке: {ee}",
+                extra={"user_id": uid}
+            )
 
 @router.message(Command("report_the_bug"), F.chat.type == "private")
 async def cmd_report_bug(message: Message):
-    """
-    Сообщить о баге администратору.
-    """
-    await message.answer(
-        "Если вы нашли ошибку, баг или неработающую кнопку, сообщите об этом сюда @admi_ludochat"
-    )
+    func_name = "cmd_report_bug"
+    user_id = message.from_user.id
+    try:
+        await message.answer(
+            "Если вы нашли ошибку, баг или неработающую кнопку, сообщите об этом сюда @admi_ludochat"
+        )
+        logging.info(
+            f"[{func_name}] – user_id={user_id} – Отправлена инструкция по репорту багов.",
+            extra={"user_id": user_id}
+        )
+    except Exception as e:
+        logging.error(
+            f"[{func_name}] – user_id={user_id} – Ошибка при отправке инструкции по баг-репорту: {e}",
+            extra={"user_id": user_id}
+        )

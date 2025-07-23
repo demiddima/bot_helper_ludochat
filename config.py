@@ -16,6 +16,9 @@ def get_env_int(key):
         raise ValueError(f"Environment variable {key} must be an integer, got: {val}")
 
 try:
+    
+    # Настроим логирование: поменяли на WARNING, чтобы избежать лишних логов
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     # Основной токен бота (используется и для логирования ошибок)
     BOT_TOKEN = os.getenv("BOT_TOKEN")
     if not BOT_TOKEN:
@@ -83,9 +86,6 @@ try:
             }
 
             PRIVATE_DESTINATIONS.append(dest)
-
-    # Настроим логирование: поменяли на WARNING, чтобы избежать лишних логов
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     
     # Логируем значение PRIVATE_DESTINATIONS для проверки только при уровне ERROR или WARNING
     logging.warning(f"PRIVATE_DESTINATIONS: {PRIVATE_DESTINATIONS}")
@@ -97,6 +97,9 @@ try:
     API_KEY_VALUE = os.getenv("API_KEY_VALUE")
     if not API_KEY_VALUE:
         raise KeyError("API_KEY_VALUE is not set")
+    
+    # Активация первого сообщения
+    SHOW_WELCOME = bool(int(os.getenv("SHOW_WELCOME", 1)))
 
     # Инициализация BOT_ID
     BOT_ID = None  # Инициализация переменной BOT_ID

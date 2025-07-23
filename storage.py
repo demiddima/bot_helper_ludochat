@@ -13,9 +13,8 @@ RETRY = {
 # USERS
 
 @retry(**RETRY)
-async def add_user(user_data: dict) -> dict:
-    user_id = user_data.get("id")
-    return await db_api_client.upsert_user(user_id, user_data)
+async def add_user(user_id: int, username: str | None, full_name: str | None) -> dict:
+    return await db_api_client.upsert_user(user_id, username, full_name)
 
 
 @retry(**RETRY)

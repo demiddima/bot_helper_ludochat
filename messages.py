@@ -1,4 +1,3 @@
-# messages.py
 from pathlib import Path
 
 # Папка с HTML-шаблонами
@@ -6,6 +5,8 @@ TEXT_DIR = Path(__file__).parent / "text"
 
 # Файлы-шаблоны
 AD_FILE         = TEXT_DIR / "advertisement.html"   # баннер «Наши ресурсы»
+AD_FILE_1       = TEXT_DIR / "advertisement_1.html" # дополнительный баннер
+AD_FILE_2       = TEXT_DIR / "advertisement_2.html" # дополнительный баннер
 WELCOME_FILE    = TEXT_DIR / "welcome.html"         # приветствие при /start
 WORK_FILE       = TEXT_DIR / "work.html"            # секция «Работа»
 ANONYMITY_FILE  = TEXT_DIR / "anonymity.html"       # секция «Анонимность»
@@ -21,6 +22,9 @@ DEFAULT_AD_TEXT = (
     "заблокировать доступ к БК/казино/ЦУПИС, снять ограничения по ФЗ-115, узнать способы заработка до 25 000 ₽ "
     "и получить другие практические советы."
 )
+DEFAULT_AD_1_TEXT = "Это баннер номер 1. Информация для пользователей."
+DEFAULT_AD_2_TEXT = "Это баннер номер 2. Дополнительная информация."
+
 DEFAULT_WELCOME_TEXT = (
     "<b>Нажимая кнопку, вы подтверждаете, что:</b>\n\n"
     "- вы не бот\n"
@@ -44,6 +48,14 @@ def get_ad_text() -> str:
     """Баннер «Наши ресурсы»."""
     return _read_file(AD_FILE, DEFAULT_AD_TEXT)
 
+def get_ad_1_text() -> str:
+    """Баннер №1."""
+    return _read_file(AD_FILE_1, DEFAULT_AD_1_TEXT)
+
+def get_ad_2_text() -> str:
+    """Баннер №2."""
+    return _read_file(AD_FILE_2, DEFAULT_AD_2_TEXT)
+
 def get_welcome_text() -> str:
     """Приветствие при старте."""
     return _read_file(WELCOME_FILE, DEFAULT_WELCOME_TEXT)
@@ -63,5 +75,3 @@ def get_projects_text() -> str:
 def get_doctors_text() -> str:
     """Секция «Врачи»."""
     return _read_file(DOCTORS_FILE, DEFAULT_DOC_TEXT)
-
-
