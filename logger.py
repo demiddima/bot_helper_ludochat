@@ -10,12 +10,28 @@ from aiohttp.http_exceptions import BadHttpMessage, BadStatusLine as AioBadStatu
 class IgnoreBadStatusLineFilter(logging.Filter):
     """Фильтр, игнорирующий ошибки BadStatusLine и сообщения с 'Invalid method encountered'."""
     def filter(self, record: logging.LogRecord) -> bool:
-        exc = record.exc_info[1] if record.exc_info else None
-        if exc and getattr(exc, "__class__", None).__name__ == "BadStatusLine":
-            return False
+        # 1. Фильтрация по типу исключения
+        if record.exc_info:
+            exc_type, exc_value, _ = record.exc_info
+            if exc_type:
+                # aiohttp, http.client, httpx
+                if issubclass(exc_type, (
+                    http.client.BadStatusLine,
+                    httpx.RemoteProtocolError,
+                    aiohttp.http_exceptions.HttpProcessingError,
+                    aiohttp.http_exceptions.BadHttpMessage,
+                    AioBadStatusLine
+                )):
+                    return False
+        # 2. Фильтрация по содержанию текста лога
         msg = record.getMessage()
-        if "Invalid method encountered" in msg:
+        if any(sub in msg for sub in [
+            "Invalid method encountered",
+            "BadStatusLine",
+            "TLSV1_ALERT"
+        ]):
             return False
+
         return True
 
 class TelegramHandler(logging.Handler):
