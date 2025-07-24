@@ -24,18 +24,11 @@ try:
     if not BOT_TOKEN:
         raise KeyError("BOT_TOKEN is not set")
 
-    # Уровень логирования: в консоль INFO+, в Telegram-канал ERROR+
-    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
-
     # Канал для логирования всех ошибок
     ERROR_LOG_CHANNEL_ID = get_env_int("ERROR_LOG_CHANNEL_ID")
 
     # Канал для обычных уведомлений (если используется)
     LOG_CHANNEL_ID = get_env_int("LOG_CHANNEL_ID")
-
-    # Списки админов для команд администрирования чатов
-    raw_admin = os.getenv("ADMIN_CHAT_IDS", "")
-    ADMIN_CHAT_IDS = [int(x) for x in raw_admin.split(";") if x]
 
     # ID пользователей, которым разрешено менять MORE_INFO
     raw_admin_user = os.getenv("ID_ADMIN_USER", "")
