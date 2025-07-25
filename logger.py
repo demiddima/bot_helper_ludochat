@@ -88,25 +88,29 @@ class TelegramHandler(logging.Handler):
 
 
 def configure_logging() -> None:
-    """Настраивает консольные, Telegram-логи и фильтры."""
+    
     root = logging.getLogger()
+    for h in list(root.handlers):
+        root.removeHandler(h)
     root.setLevel(logging.INFO)
 
     # общий формат
-    log_formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - [%(funcName)s/%(module)s] - [%(user_id)s] - %(message)s'
-    )
+    fmt = '%(asctime)s - %(levelname)s - [%(funcName)s/%(module)s] - [%(user_id)s] - %(message)s'
+    formatter = logging.Formatter(fmt)
 
-    # Console handler
+    # Консольный хендлер
     ch = logging.StreamHandler(sys.stdout)
     ch.setLevel(logging.INFO)
-    ch.setFormatter(log_formatter)
+    ch.setFormatter(formatter)
+    ch.addFilter(IgnoreNotHandledUpdatesFilter())
     root.addHandler(ch)
 
     # Telegram handler
     th = TelegramHandler()
-    th.setFormatter(log_formatter)
+    th.setLevel(logging.ERROR)
+    th.setFormatter(formatter)
     th.addFilter(IgnoreBadStatusLineFilter())
+    th.addFilter(IgnoreNotHandledUpdatesFilter())
     root.addHandler(th)
 
     # Отключаем детализированные логи HTTPX, Aiogram, aiohttp
@@ -115,6 +119,7 @@ def configure_logging() -> None:
     logging.getLogger("aiohttp").setLevel(logging.ERROR)
 
     # Добавляем фильтр для uvicorn.access — игнорируем статические запросы
-    static_paths = ["/favicon.ico", "/robots.txt", "/sitemap.xml", "/config.json"]
     access_logger = logging.getLogger("uvicorn.access")
+    access_logger.setLevel(logging.WARNING)
+    static_paths = ["/favicon.ico", "/robots.txt", "/sitemap.xml", "/config.json"]
     access_logger.addFilter(IgnoreStaticPathsFilter(static_paths))
