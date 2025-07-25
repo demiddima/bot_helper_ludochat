@@ -113,11 +113,14 @@ def configure_logging() -> None:
     th.addFilter(IgnoreNotHandledUpdatesFilter())
     root.addHandler(th)
 
-    # Отключаем детализированные логи HTTPX, Aiogram, aiohttp
+    # Отключаем детализированные логи HTTPX, Aiogram и aiohttp
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("aiogram").setLevel(logging.WARNING)
     logging.getLogger("aiogram.dispatcher").setLevel(logging.WARNING)
     logging.getLogger("aiohttp").setLevel(logging.ERROR)
 
-    # Скрываем все INFO-логи uvicorn.access (HTTP-access)
-    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    # Полностью подавляем все HTTP-access логи от uvicorn
+    access_logger = logging.getLogger("uvicorn.access")
+    access_logger.setLevel(logging.CRITICAL)    # только CRITICAL+
+    access_logger.propagate = False             # не передавать дальше в корень
+    access_logger.handlers.clear()              # удаляем все хендлеры
