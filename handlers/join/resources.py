@@ -126,7 +126,7 @@ async def send_resources_message(bot, user, uid, refresh=False, previous_message
         advertisement_1_text = await read_advertisement_file('advertisement_1.html')
         advertisement_2_text = await read_advertisement_file('advertisement_2.html')
 
-        text = "<b>Наше сообщество</b>:\n\n"
+        text = "Привет! Это бот с информацией для зависимых от азартных игр. Изучайте ссылки, пользуйтесь нашими инструментами и налаживайте жизнь.\n\n"
 
         logging.info(
             f"user_id={uid} – buttons: {buttons}",

@@ -30,7 +30,11 @@ class IgnoreBadStatusLineFilter(logging.Filter):
             "b'\\x05\\x01'",
             "b'\\x04\\x01'",
             "b'\\x16\\x03\\x01\\x02'",
-            "b'OPTIONS sip:"
+            "b'OPTIONS sip:",
+            "aiohttp.http_exceptions.BadHttpMessage",
+            "TLSV1_ALERT",
+            "Pause on PRI/Upgrade",
+            "Update id="
         ))
 
 class IgnoreUpdateFilter(logging.Filter):
