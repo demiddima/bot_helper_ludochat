@@ -32,13 +32,13 @@ tracked_chats: set = set()
 
 # 1) ловим uncaught исключения в sync-коде
 def _excepthook(exc_type, exc_value, tb):
-    logging.getLogger(__name__).exception("[MAIN] - Необработанное исключение", exc_info=(exc_type, exc_value, tb))
+    logging.getLogger(__name__).exception("Необработанное исключение", exc_info=(exc_type, exc_value, tb))
 sys.excepthook = _excepthook
 
 
 # 2) ловим исключения в asyncio-тасках
 def _async_exception_handler(loop, context):
-    logging.getLogger(__name__).error("[MAIN] - Необработанная ошибка asyncio", exc_info=context.get("exception"))
+    logging.getLogger(__name__).error("Необработанная ошибка asyncio", exc_info=context.get("exception"))
 asyncio.get_event_loop().set_exception_handler(_async_exception_handler)
 
 
@@ -57,7 +57,7 @@ async def global_error_handler(*args) -> bool:
         return True
 
     log = logging.getLogger(__name__)
-    log.exception(f"[MAIN] - Необработанное исключение: {exception}", exc_info=True)
+    log.exception(f"Необработанное исключение: {exception}", exc_info=True)
 
     error_text = f"❗️<b>Ошибка:</b>\n<pre>{html.escape(str(exception))}</pre>"
     bot = get_bot()
@@ -73,13 +73,13 @@ async def global_error_handler(*args) -> bool:
                 disable_web_page_preview=True
             )
         except Exception as send_exc:
-            log.error(f"[MAIN] - Не удалось отправить часть сообщения об ошибке: {send_exc}")
+            log.error(f"Не удалось отправить часть сообщения об ошибке: {send_exc}")
 
     if update and hasattr(update, "message") and update.message:
         try:
             await update.message.answer("Произошла внутренняя ошибка, попробуйте позже.")
         except Exception as user_exc:
-            log.error(f"[MAIN] - Не удалось уведомить пользователя: {user_exc}")
+            log.error(f"Не удалось уведомить пользователя: {user_exc}")
 
     return True
 
@@ -88,7 +88,7 @@ async def main():
     log = logging.getLogger(__name__)
 
     if "Запускаем бота" not in already_logged:
-        log.info("[MAIN] - Запускаем бота")
+        log.info("Запускаем бота")
         already_logged.add("Запускаем бота")
 
     bot = Bot(token=config.BOT_TOKEN, parse_mode=ParseMode.HTML)
@@ -107,7 +107,7 @@ async def main():
     global tracked_chats
     tracked_chats_data = await db_api_client.get_chats()
     tracked_chats = set(tracked_chats_data)
-    log.info(f"[MAIN] - tracked_chats: {tracked_chats}")
+    log.info(f"tracked_chats: {tracked_chats}")
 
     me = await bot.get_me()
     config.BOT_ID = me.id
@@ -119,11 +119,11 @@ async def main():
     })
 
     if f"Registered bot chat: {me.id}" not in already_logged:
-        log.info(f"[MAIN] - Зарегистрирован чат бота: {me.id}")
+        log.info(f"Зарегистрирован чат бота: {me.id}")
         already_logged.add(f"Registered bot chat: {me.id}")
 
     port = int(os.getenv("PORT", "8080"))
-    log.info(f"[MAIN] - HTTP health-check сервер запущен на порту {port}")
+    log.info(f"HTTP health-check сервер запущен на порту {port}")
 
     app = web.Application()
     async def health(request):
@@ -143,4 +143,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        logging.getLogger(__name__).warning("[MAIN] - Завершение работы...")
+        logging.getLogger(__name__).warning("Завершение работы...")

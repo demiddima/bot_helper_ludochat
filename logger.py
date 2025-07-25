@@ -1,4 +1,4 @@
-# Commit: Убран RecordFactory, введён CustomFormatter для безопасной установки user_id
+# Commit: Расширен IgnoreBadStatusLineFilter для подавления бинарных мусорных запросов
 
 import logging
 import sys
@@ -9,10 +9,9 @@ import aiohttp.http_exceptions
 from aiohttp.http_exceptions import HttpProcessingError, BadHttpMessage, BadStatusLine as AioBadStatusLine
 import config
 
-# ── Фильтры оставляем без изменений ──
-
 class IgnoreBadStatusLineFilter(logging.Filter):
-    def filter(self, record):
+    """Игнорирует BadStatusLine, TLS, SOCKS и мусор от сканеров."""
+    def filter(self, record: logging.LogRecord) -> bool:
         if record.exc_info:
             exc_type = record.exc_info[0]
             if exc_type and issubclass(exc_type, (
@@ -24,10 +23,17 @@ class IgnoreBadStatusLineFilter(logging.Filter):
             )):
                 return False
         msg = record.getMessage()
-        return not any(sub in msg for sub in ("Invalid method encountered", "TLSV1_ALERT"))
+        return not any(bad in msg for bad in (
+            "Invalid method encountered",
+            "BadStatusLine",
+            "b'\\x16\\x03\\x01'",
+            "b'\\x05\\x01'",
+            "b'\\x04\\x01'",
+            "b'\\x16\\x03\\x01\\x02'",
+            "b'OPTIONS sip:"
+        ))
 
 class IgnoreUpdateFilter(logging.Filter):
-    """Отбрасывает любые сообщения об апдейтах."""
     def filter(self, record):
         return "Update id=" not in record.getMessage()
 
@@ -39,19 +45,11 @@ class IgnoreStaticPathsFilter(logging.Filter):
         msg = record.getMessage()
         return not any(path in msg for path in self.ignore_paths)
 
-# ── Новый форматтер ──
-
 class CustomFormatter(logging.Formatter):
-    """
-    Если в record нет user_id — устанавливаем 'system',
-    но не перезаписываем, если extra уже дал его.
-    """
     def format(self, record):
         if not hasattr(record, "user_id"):
             record.user_id = "system"
         return super().format(record)
-
-# ── Хэндлер Telegram (без изменений) ──
 
 class TelegramHandler(logging.Handler):
     def __init__(self):
@@ -62,7 +60,6 @@ class TelegramHandler(logging.Handler):
     def emit(self, record):
         if not self.token or not self.chat_id:
             return
-        # повторная фильтрация BadStatusLine
         if record.exc_info:
             etype = record.exc_info[0]
             if etype and issubclass(etype, (
@@ -97,33 +94,27 @@ def configure_logging():
     fmt = '%(asctime)s - %(levelname)s - [%(funcName)s/%(module)s] - [%(user_id)s] - %(message)s'
     formatter = CustomFormatter(fmt)
 
-    # Консольный handler
     ch = logging.StreamHandler(sys.stdout)
     ch.setLevel(logging.INFO)
     ch.setFormatter(formatter)
-    # фильтруем апдейты и статические запросы
     ch.addFilter(IgnoreUpdateFilter())
     root.addHandler(ch)
 
-    # Telegram handler
     th = TelegramHandler()
     th.setFormatter(formatter)
     th.addFilter(IgnoreBadStatusLineFilter())
     th.addFilter(IgnoreUpdateFilter())
     root.addHandler(th)
 
-    # Подавление шумных логов
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("aiogram").setLevel(logging.WARNING)
     logging.getLogger("aiogram.dispatcher").setLevel(logging.WARNING)
     logging.getLogger("aiohttp").setLevel(logging.ERROR)
 
-    # uvicorn.access — фильтруем статику
     access = logging.getLogger("uvicorn.access")
     access.setLevel(logging.INFO)
     access.addFilter(IgnoreStaticPathsFilter([
         "/favicon.ico", "/robots.txt", "/sitemap.xml", "/config.json", "/.env", "/.git/"
     ]))
 
-# Вызываем при старте
 configure_logging()

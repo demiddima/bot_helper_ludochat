@@ -24,19 +24,19 @@ async def update_links(message: Message):
             refresh=True,  # Указываем, что нужно перегенерировать ссылки
         )
         logging.info(
-            f"[{func_name}] – user_id={uid} – Успешно обновлены ссылки.",
+            f"user_id={uid} – Успешно обновлены ссылки.",
             extra={"user_id": uid}
         )
     except Exception as e:
         logging.error(
-            f"[{func_name}] – user_id={uid} – Ошибка при обновлении ссылок: {e}",
+            f"user_id={uid} – Ошибка при обновлении ссылок: {e}",
             extra={"user_id": uid}
         )
         try:
             await message.answer("Произошла ошибка при обновлении ссылок.", parse_mode=ParseMode.HTML)
         except Exception as ee:
             logging.error(
-                f"[{func_name}] – user_id={uid} – Не удалось уведомить пользователя об ошибке: {ee}",
+                f"user_id={uid} – Не удалось уведомить пользователя об ошибке: {ee}",
                 extra={"user_id": uid}
             )
 
@@ -49,11 +49,11 @@ async def cmd_report_bug(message: Message):
             "Если вы нашли ошибку, баг или неработающую кнопку, сообщите об этом сюда @admi_ludochat"
         )
         logging.info(
-            f"[{func_name}] – user_id={user_id} – Отправлена инструкция по репорту багов.",
+            f"user_id={user_id} – Отправлена инструкция по репорту багов.",
             extra={"user_id": user_id}
         )
     except Exception as e:
         logging.error(
-            f"[{func_name}] – user_id={user_id} – Ошибка при отправке инструкции по баг-репорту: {e}",
+            f"user_id={user_id} – Ошибка при отправке инструкции по баг-репорту: {e}",
             extra={"user_id": user_id}
         )

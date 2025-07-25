@@ -34,7 +34,7 @@ async def process_start(message: Message):
             await track_link_visit(key)
         except Exception as exc:
             logging.error(
-                f"[{func_name}] – user_id={uid} – Ошибка отслеживания визита ссылки: {exc}",
+                f"user_id={uid} – Ошибка отслеживания визита ссылки: {exc}",
                 extra={"user_id": uid}
             )
 
@@ -43,7 +43,7 @@ async def process_start(message: Message):
         await membership.add_user_and_membership(message.from_user, config.BOT_ID)
     except Exception as exc:
         logging.exception(
-            f"[{func_name}] – user_id={uid} – Ошибка add_user_and_membership: {exc}",
+            f"user_id={uid} – Ошибка add_user_and_membership: {exc}",
             extra={"user_id": uid}
         )
 
@@ -52,12 +52,12 @@ async def process_start(message: Message):
         try:
             await set_user_accepted(uid)
             logging.info(
-                f"[{func_name}] – user_id={uid} – Условие принято автоматически (SHOW_WELCOME=0)",
+                f"user_id={uid} – Условие принято автоматически (SHOW_WELCOME=0)",
                 extra={"user_id": uid}
             )
         except Exception as exc:
             logging.exception(
-                f"[{func_name}] – user_id={uid} – Ошибка при auto set_terms_accepted: {exc}",
+                f"user_id={uid} – Ошибка при auto set_terms_accepted: {exc}",
                 extra={"user_id": uid}
             )
         if len(parts) == 2 and parts[1] not in ("start",) and not parts[1].startswith("verify_"):
@@ -77,7 +77,7 @@ async def process_start(message: Message):
         if ts is None or time.time() - ts > 300:
             join_requests.pop(orig, None)
             logging.warning(
-                f"[{func_name}] – user_id={uid} – verify_{orig} истёк или не найден",
+                f"user_id={uid} – verify_{orig} истёк или не найден",
                 extra={"user_id": uid}
             )
             return await message.reply(
@@ -93,12 +93,12 @@ async def process_start(message: Message):
         try:
             await set_user_accepted(orig)
             logging.info(
-                f"[{func_name}] – user_id={uid} – Условие принято (verify_{orig})",
+                f"user_id={uid} – Условие принято (verify_{orig})",
                 extra={"user_id": uid}
             )
         except Exception as exc:
             logging.exception(
-                f"[{func_name}] – user_id={uid} – Ошибка set_terms_accepted: {exc}",
+                f"user_id={uid} – Ошибка set_terms_accepted: {exc}",
                 extra={"user_id": uid}
             )
         return await send_resources_message(bot, message.from_user, orig)

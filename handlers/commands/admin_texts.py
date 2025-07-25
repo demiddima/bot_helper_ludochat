@@ -41,12 +41,12 @@ def _text_command_handler(command_name: str, pending_set: set[int], file_path):
             await message.answer(f"📄 Пришлите новый HTML-текст для «{command_name}.html»")
             pending_set.add(user_id)
             logging.info(
-                f"[{func_name}.start_handler] – user_id={user_id} – Ожидание нового текста для {command_name}.html",
+                f"user_id={user_id} – Ожидание нового текста для {command_name}.html",
                 extra={"user_id": user_id}
             )
         except Exception as e:
             logging.error(
-                f"[{func_name}.start_handler] – user_id={user_id} – Ошибка при старте команды: {e}",
+                f"user_id={user_id} – Ошибка при старте команды: {e}",
                 extra={"user_id": user_id}
             )
 
@@ -63,19 +63,19 @@ def _text_command_handler(command_name: str, pending_set: set[int], file_path):
                 f.write(new_text)
             await message.answer(f"✅ Файл «{command_name}.html» успешно обновлён и будет использоваться сразу.")
             logging.info(
-                f"[{func_name}.receive_handler] – user_id={user_id} – Обновлён файл {command_name}.html",
+                f"user_id={user_id} – Обновлён файл {command_name}.html",
                 extra={"user_id": user_id}
             )
         except Exception as e:
             logging.error(
-                f"[{func_name}.receive_handler] – user_id={user_id} – Не удалось сохранить «{command_name}.html»: {e}",
+                f"user_id={user_id} – Не удалось сохранить «{command_name}.html»: {e}",
                 extra={"user_id": user_id}
             )
             try:
                 await message.answer(f"❌ Ошибка при сохранении «{command_name}.html». Подробности в логах.")
             except Exception as ee:
                 logging.error(
-                    f"[{func_name}.receive_handler] – user_id={user_id} – Не удалось отправить сообщение об ошибке: {ee}",
+                    f"user_id={user_id} – Не удалось отправить сообщение об ошибке: {ee}",
                     extra={"user_id": user_id}
                 )
         finally:

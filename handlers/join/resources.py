@@ -24,7 +24,7 @@ async def send_chunked_message(chat_id: int, text: str, **kwargs):
             await bot.send_message(chat_id, text[start:start+4096], **kwargs)
         except Exception as e:
             logging.error(
-                f"[{func_name}] – user_id={chat_id} – Ошибка при отправке chunked message: {e}",
+                f"user_id={chat_id} – Ошибка при отправке chunked message: {e}",
                 extra={"user_id": chat_id}
             )
 
@@ -36,7 +36,7 @@ async def read_advertisement_file(file_name):
             return f.read()
     except Exception as e:
         logging.error(
-            f"[{func_name}] – user_id=system – Ошибка при чтении файла {file_name}: {e}",
+            f"user_id=system – Ошибка при чтении файла {file_name}: {e}",
             extra={"user_id": "system"}
         )
         return ""
@@ -54,14 +54,14 @@ async def send_resources_message(bot, user, uid, refresh=False, previous_message
 
         bot_info = await bot.get_me()
         logging.debug(
-            f"[{func_name}] – user_id={uid} – user: {user.full_name} (@{user.username or 'нет'}), bot: @{bot_info.username}, ID: {bot_info.id}",
+            f"user_id={uid} – user: {user.full_name} (@{user.username or 'нет'}), bot: @{bot_info.username}, ID: {bot_info.id}",
             extra={"user_id": uid}
         )
 
         # Получаем/обновляем invite-ссылки
         if refresh:
             logging.info(
-                f"[{func_name}] – user_id={uid} – Обновление ссылок",
+                f"user_id={uid} – Обновление ссылок",
                 extra={"user_id": uid}
             )
             try:
@@ -71,7 +71,7 @@ async def send_resources_message(bot, user, uid, refresh=False, previous_message
                 )
             except Exception as e:
                 logging.error(
-                    f"[{func_name}] – user_id={uid} – Ошибка при генерации ссылок: {e}",
+                    f"user_id={uid} – Ошибка при генерации ссылок: {e}",
                     extra={"user_id": uid}
                 )
                 raise
@@ -80,7 +80,7 @@ async def send_resources_message(bot, user, uid, refresh=False, previous_message
                 all_links = await get_all_invite_links(uid)
                 if not all_links:
                     logging.warning(
-                        f"[{func_name}] – user_id={uid} – Ссылки не найдены, генерируем новые",
+                        f"user_id={uid} – Ссылки не найдены, генерируем новые",
                         extra={"user_id": uid}
                     )
                     links, buttons = await generate_invite_links(
@@ -89,7 +89,7 @@ async def send_resources_message(bot, user, uid, refresh=False, previous_message
                     )
                 else:
                     logging.info(
-                        f"[{func_name}] – user_id={uid} – Используем существующие ссылки",
+                        f"user_id={uid} – Используем существующие ссылки",
                         extra={"user_id": uid}
                     )
                     buttons = []
@@ -107,18 +107,18 @@ async def send_resources_message(bot, user, uid, refresh=False, previous_message
                                 buttons.append([{"text": title, "url": link, "description": description}])
                             else:
                                 logging.error(
-                                    f"[{func_name}] – user_id={uid} – Не найдена ссылка для «{title}» (chat_id={cid})",
+                                    f"user_id={uid} – Не найдена ссылка для «{title}» (chat_id={cid})",
                                     extra={"user_id": uid}
                                 )
                         except Exception as e:
                             logging.error(
-                                f"[{func_name}] – user_id={uid} – Ошибка при обработке назначения {dest}: {e}",
+                                f"user_id={uid} – Ошибка при обработке назначения {dest}: {e}",
                                 extra={"user_id": uid}
                             )
                             continue
             except Exception as e:
                 logging.error(
-                    f"[{func_name}] – user_id={uid} – Ошибка при получении ссылок: {e}",
+                    f"user_id={uid} – Ошибка при получении ссылок: {e}",
                     extra={"user_id": uid}
                 )
                 raise
@@ -129,7 +129,7 @@ async def send_resources_message(bot, user, uid, refresh=False, previous_message
         text = "<b>Наше сообщество</b>:\n\n"
 
         logging.info(
-            f"[{func_name}] – user_id={uid} – buttons: {buttons}",
+            f"user_id={uid} – buttons: {buttons}",
             extra={"user_id": uid}
         )
 
@@ -137,11 +137,11 @@ async def send_resources_message(bot, user, uid, refresh=False, previous_message
         text += f"<a href='{buttons[1][0]['url']}'><b>Выручка</b></a> — {advertisement_2_text}\n\n"
 
         # logging.info(
-        #     f"[{func_name}] – user_id={uid} – Лудочат ссылка: {buttons[0][0]['url']}",
+        #     f"user_id={uid} – Лудочат ссылка: {buttons[0][0]['url']}",
         #     extra={"user_id": uid}
         # )
         # logging.info(
-        #     f"[{func_name}] – user_id={uid} – Выручка ссылка: {buttons[1][0]['url']}",
+        #     f"user_id={uid} – Выручка ссылка: {buttons[1][0]['url']}",
         #     extra={"user_id": uid}
         # )
 
@@ -152,10 +152,7 @@ async def send_resources_message(bot, user, uid, refresh=False, previous_message
                 InlineKeyboardButton(text="Обновить ссылки", callback_data=f"refresh_{uid}")
             ],
             [
-                InlineKeyboardButton(text="Наше сообщество", callback_data="section_advertisement"),
-            ],
-            [
-                InlineKeyboardButton(text="Все проекты", callback_data="section_projects"),
+                InlineKeyboardButton(text="Наше сообщество", callback_data="section_projects"),
                 InlineKeyboardButton(text="Помощь", callback_data="section_doctors"),
             ],
             [
@@ -187,7 +184,7 @@ async def send_resources_message(bot, user, uid, refresh=False, previous_message
 
     except Exception as e:
         logging.error(
-            f"[{func_name}] – user_id={uid} – Ошибка при отправке сообщения с ресурсами: {e}",
+            f"user_id={uid} – Ошибка при отправке сообщения с ресурсами: {e}",
             extra={"user_id": uid}
         )
         raise
@@ -201,13 +198,13 @@ async def on_refresh(query: CallbackQuery):
         await send_resources_message(query.bot, query.from_user, uid, refresh=True)
     except Exception as e:
         logging.error(
-            f"[{func_name}] – user_id={uid} – Ошибка при обновлении ресурсов: {e}",
+            f"user_id={uid} – Ошибка при обновлении ресурсов: {e}",
             extra={"user_id": uid}
         )
         try:
             await query.answer("Произошла ошибка при обновлении ресурсов.")
         except Exception as ee:
             logging.error(
-                f"[{func_name}] – user_id={uid} – Ошибка при отправке сообщения пользователю: {ee}",
+                f"user_id={uid} – Ошибка при отправке сообщения пользователю: {ee}",
                 extra={"user_id": uid}
             )

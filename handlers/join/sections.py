@@ -44,11 +44,11 @@ async def section_work(query: CallbackQuery):
 
     # Проверка на изменение текста и разметки
     if not is_message_modified(normalized_current_text, normalized_new_text, current_markup, new_markup):
-        logging.info(f"[{func_name}] – user_id={uid} – Контент не изменился. Игнорируем.", extra={"user_id": uid})
+        logging.info(f"user_id={uid} – Контент не изменился. Игнорируем.", extra={"user_id": uid})
         return  # Если сообщение не изменилось, игнорируем запрос
 
     try:
-        logging.info(f"[{func_name}] – user_id={uid} – нажата секция section_work", extra={"user_id": uid})
+        logging.info(f"user_id={uid} – нажата секция section_work", extra={"user_id": uid})
         await query.message.edit_text(
             new_text,
             parse_mode="HTML",
@@ -56,7 +56,7 @@ async def section_work(query: CallbackQuery):
             reply_markup=new_markup
         )
     except Exception as e:
-        logging.error(f"[{func_name}] – user_id={uid} – Ошибка при обработке секции section_work: {e}", extra={"user_id": uid})
+        logging.error(f"user_id={uid} – Ошибка при обработке секции section_work: {e}", extra={"user_id": uid})
 
 @router.callback_query(F.data == "section_anonymity")
 async def section_anonymity(query: CallbackQuery):
@@ -73,11 +73,11 @@ async def section_anonymity(query: CallbackQuery):
     normalized_new_text = normalize_text(new_text)
 
     if not is_message_modified(normalized_current_text, normalized_new_text, current_markup, new_markup):
-        logging.info(f"[{func_name}] – user_id={uid} – Контент не изменился. Игнорируем.", extra={"user_id": uid})
+        logging.info(f"user_id={uid} – Контент не изменился. Игнорируем.", extra={"user_id": uid})
         return  # Если сообщение не изменилось, игнорируем запрос
 
     try:
-        logging.info(f"[{func_name}] – user_id={uid} – нажата секция section_anonymity", extra={"user_id": uid})
+        logging.info(f"user_id={uid} – нажата секция section_anonymity", extra={"user_id": uid})
         await query.message.edit_text(
             new_text,
             parse_mode="HTML",
@@ -85,7 +85,7 @@ async def section_anonymity(query: CallbackQuery):
             reply_markup=new_markup
         )
     except Exception as e:
-        logging.error(f"[{func_name}] – user_id={uid} – Ошибка при обработке секции section_anonymity: {e}", extra={"user_id": uid})
+        logging.error(f"user_id={uid} – Ошибка при обработке секции section_anonymity: {e}", extra={"user_id": uid})
 
 @router.callback_query(F.data == "section_projects")
 async def section_projects(query: CallbackQuery):
@@ -102,11 +102,11 @@ async def section_projects(query: CallbackQuery):
     normalized_new_text = normalize_text(new_text)
 
     if not is_message_modified(normalized_current_text, normalized_new_text, current_markup, new_markup):
-        logging.info(f"[{func_name}] – user_id={uid} – Контент не изменился. Игнорируем.", extra={"user_id": uid})
+        logging.info(f"user_id={uid} – Контент не изменился. Игнорируем.", extra={"user_id": uid})
         return  # Если сообщение не изменилось, игнорируем запрос
 
     try:
-        logging.info(f"[{func_name}] – user_id={uid} – нажата секция section_projects", extra={"user_id": uid})
+        logging.info(f"user_id={uid} – нажата секция section_projects", extra={"user_id": uid})
         await query.message.edit_text(
             new_text,
             parse_mode="HTML",
@@ -114,7 +114,7 @@ async def section_projects(query: CallbackQuery):
             reply_markup=new_markup
         )
     except Exception as e:
-        logging.error(f"[{func_name}] – user_id={uid} – Ошибка при обработке секции section_projects: {e}", extra={"user_id": uid})
+        logging.error(f"user_id={uid} – Ошибка при обработке секции section_projects: {e}", extra={"user_id": uid})
 
 @router.callback_query(F.data == "section_doctors")
 async def section_doctors(query: CallbackQuery):
@@ -131,11 +131,11 @@ async def section_doctors(query: CallbackQuery):
     normalized_new_text = normalize_text(new_text)
 
     if not is_message_modified(normalized_current_text, normalized_new_text, current_markup, new_markup):
-        logging.info(f"[{func_name}] – user_id={uid} – Контент не изменился. Игнорируем.", extra={"user_id": uid})
+        logging.info(f"user_id={uid} – Контент не изменился. Игнорируем.", extra={"user_id": uid})
         return  # Если сообщение не изменилось, игнорируем запрос
 
     try:
-        logging.info(f"[{func_name}] – user_id={uid} – нажата секция section_doctors", extra={"user_id": uid})
+        logging.info(f"user_id={uid} – нажата секция section_doctors", extra={"user_id": uid})
         await query.message.edit_text(
             new_text,
             parse_mode="HTML",
@@ -143,7 +143,7 @@ async def section_doctors(query: CallbackQuery):
             reply_markup=new_markup
         )
     except Exception as e:
-        logging.error(f"[{func_name}] – user_id={uid} – Ошибка при обработке секции section_doctors: {e}", extra={"user_id": uid})
+        logging.error(f"user_id={uid} – Ошибка при обработке секции section_doctors: {e}", extra={"user_id": uid})
 
 @router.callback_query(F.data == "section_advertisement")
 async def section_advertisement(query: CallbackQuery):
@@ -160,11 +160,11 @@ async def section_advertisement(query: CallbackQuery):
     normalized_current = normalize_text(current_text)
     normalized_new = normalize_text(new_text)
     if not is_message_modified(normalized_current, normalized_new, current_markup, new_markup):
-        logging.info(f"[{func_name}] – user_id={uid} – Контент не изменился. Игнорируем.", extra={"user_id": uid})
+        logging.info(f"user_id={uid} – Контент не изменился. Игнорируем.", extra={"user_id": uid})
         return
 
     try:
-        logging.info(f"[{func_name}] – user_id={uid} – нажата секция section_advertisement", extra={"user_id": uid})
+        logging.info(f"user_id={uid} – нажата секция section_advertisement", extra={"user_id": uid})
         # Редактируем сообщение, вставляя рекламный текст
         await query.message.edit_text(
             new_text,
@@ -174,6 +174,6 @@ async def section_advertisement(query: CallbackQuery):
         )
     except Exception as e:
         logging.error(
-            f"[{func_name}] – user_id={uid} – Ошибка при обработке секции section_advertisement: {e}",
+            f"user_id={uid} – Ошибка при обработке секции section_advertisement: {e}",
             extra={"user_id": uid}
         )
