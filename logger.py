@@ -12,10 +12,12 @@ from aiohttp.http_exceptions import BadHttpMessage, BadStatusLine as AioBadStatu
 
 # Фильтр для игнорирования сообщений "is not handled"
 class IgnoreNotHandledUpdatesFilter(logging.Filter):
-    """Игнорирует логи вида 'Update id=… is not handled.'."""
+    """Игнорирует логи вида 'Update id=… is not handled.' и 'Update id=… is handled. Duration…'."""
     def filter(self, record: logging.LogRecord) -> bool:
         msg = record.getMessage()
-        return "is not handled." not in msg
+        # не пропускаем, если это сообщение об обновлении – как не обработанном, так и обработанном
+        ignore_subs = ["is not handled.", "is handled. Duration"]
+        return not any(sub in msg for sub in ignore_subs)
 
 # Новый фильтр для access-логов
 class IgnoreStaticPathsFilter(logging.Filter):

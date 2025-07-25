@@ -152,6 +152,9 @@ async def send_resources_message(bot, user, uid, refresh=False, previous_message
                 InlineKeyboardButton(text="Обновить ссылки", callback_data=f"refresh_{uid}")
             ],
             [
+                InlineKeyboardButton(text="Наше сообщество", callback_data="section_advertisement"),
+            ],
+            [
                 InlineKeyboardButton(text="Все проекты", callback_data="section_projects"),
                 InlineKeyboardButton(text="Помощь", callback_data="section_doctors"),
             ],

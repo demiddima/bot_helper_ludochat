@@ -144,3 +144,36 @@ async def section_doctors(query: CallbackQuery):
         )
     except Exception as e:
         logging.error(f"[{func_name}] – user_id={uid} – Ошибка при обработке секции section_doctors: {e}", extra={"user_id": uid})
+
+@router.callback_query(F.data == "section_advertisement")
+async def section_advertisement(query: CallbackQuery):
+    uid = query.from_user.id
+    func_name = "section_advertisement"
+    current_text = query.message.text
+    current_markup = query.message.reply_markup
+
+    # Новый текст и разметка
+    new_text = messages.get_ad_text()
+    new_markup = query.message.reply_markup
+
+    # Нормализуем и проверяем изменения
+    normalized_current = normalize_text(current_text)
+    normalized_new = normalize_text(new_text)
+    if not is_message_modified(normalized_current, normalized_new, current_markup, new_markup):
+        logging.info(f"[{func_name}] – user_id={uid} – Контент не изменился. Игнорируем.", extra={"user_id": uid})
+        return
+
+    try:
+        logging.info(f"[{func_name}] – user_id={uid} – нажата секция section_advertisement", extra={"user_id": uid})
+        # Редактируем сообщение, вставляя рекламный текст
+        await query.message.edit_text(
+            new_text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=new_markup
+        )
+    except Exception as e:
+        logging.error(
+            f"[{func_name}] – user_id={uid} – Ошибка при обработке секции section_advertisement: {e}",
+            extra={"user_id": uid}
+        )
