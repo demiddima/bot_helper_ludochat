@@ -1,3 +1,6 @@
+import logger
+logger.configure_logging()
+
 import os
 import sys
 import asyncio
