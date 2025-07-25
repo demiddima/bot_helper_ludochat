@@ -16,7 +16,7 @@ class IgnoreNotHandledUpdatesFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         msg = record.getMessage()
         # не пропускаем, если это сообщение об обновлении – как не обработанном, так и обработанном
-        ignore_subs = ["is not handled.", "is handled. Duration"]
+        ignore_subs = ["is not handled.", "is handled"]
         return not any(sub in msg for sub in ignore_subs)
 
 # Новый фильтр для access-логов
@@ -116,10 +116,8 @@ def configure_logging() -> None:
     # Отключаем детализированные логи HTTPX, Aiogram, aiohttp
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("aiogram").setLevel(logging.WARNING)
+    logging.getLogger("aiogram.dispatcher").setLevel(logging.WARNING)
     logging.getLogger("aiohttp").setLevel(logging.ERROR)
 
-    # Добавляем фильтр для uvicorn.access — игнорируем статические запросы
-    access_logger = logging.getLogger("uvicorn.access")
-    access_logger.setLevel(logging.WARNING)
-    static_paths = ["/favicon.ico", "/robots.txt", "/sitemap.xml", "/config.json"]
-    access_logger.addFilter(IgnoreStaticPathsFilter(static_paths))
+    # Скрываем все INFO-логи uvicorn.access (HTTP-access)
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
