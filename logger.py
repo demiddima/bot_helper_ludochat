@@ -8,9 +8,9 @@ import httpx
 import aiohttp.http_exceptions
 from aiohttp.http_exceptions import HttpProcessingError, BadHttpMessage, BadStatusLine as AioBadStatusLine
 import config
-
+        
 class IgnoreBadStatusLineFilter(logging.Filter):
-    """Игнорирует BadStatusLine, TLS, SOCKS и мусор от сканеров."""
+    """Игнорирует шумные HTTP-исключения и сопутствующие сообщения."""
     def filter(self, record: logging.LogRecord) -> bool:
         if record.exc_info:
             exc_type = record.exc_info[0]
@@ -23,19 +23,25 @@ class IgnoreBadStatusLineFilter(logging.Filter):
             )):
                 return False
         msg = record.getMessage()
-        return not any(bad in msg for bad in (
+        if any(sub in msg for sub in 
+            ("Invalid method encountered", 
+            "TLSV1_ALERT", 
             "Invalid method encountered",
             "BadStatusLine",
             "b'\\x16\\x03\\x01'",
             "b'\\x05\\x01'",
             "b'\\x04\\x01'",
             "b'\\x16\\x03\\x01\\x02'",
-            "b'OPTIONS sip:",
+            "b'\\x16\\x03\\x01\\x01\\x17\\x01",
+            "b'OPTIONS sip",
             "aiohttp.http_exceptions.BadHttpMessage",
             "TLSV1_ALERT",
             "Pause on PRI/Upgrade",
-            "Update id="
-        ))
+            "Update id=",
+            "b'MGLNDD")):
+            return False
+        return True
+
 
 class IgnoreUpdateFilter(logging.Filter):
     def filter(self, record):

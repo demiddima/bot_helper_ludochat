@@ -149,16 +149,17 @@ async def send_resources_message(bot, user, uid, refresh=False, previous_message
             [
                 InlineKeyboardButton(text="Лудочат", url=buttons[0][0]["url"]),
                 InlineKeyboardButton(text="Выручка", url=buttons[1][0]["url"]),
-                InlineKeyboardButton(text="Обновить ссылки", callback_data=f"refresh_{uid}")
+            #   InlineKeyboardButton(text="Обновить ссылки", callback_data=f"refresh_{uid}")
             ],
             [
                 InlineKeyboardButton(text="Наше сообщество", callback_data="section_projects"),
-                InlineKeyboardButton(text="Помощь", callback_data="section_doctors"),
+                InlineKeyboardButton(text="Ваша анонимность", callback_data="section_anonymity"),
+            #    InlineKeyboardButton(text="Помощь", callback_data="section_doctors"),
             ],
-            [
-                InlineKeyboardButton(text="Работа", callback_data="section_work"),
-                InlineKeyboardButton(text="Анонимность", callback_data="section_anonymity"),
-            ],
+            # [
+            #     InlineKeyboardButton(text="Работа", callback_data="section_work"),
+            #     InlineKeyboardButton(text="Анонимность", callback_data="section_anonymity"),
+            # ],
         ])
 
         await send_chunked_message(
