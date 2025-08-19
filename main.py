@@ -11,7 +11,8 @@ from utils import get_bot
 from datetime import datetime
 from aiohttp import web
 from aiogram import Bot, Dispatcher
-from aiogram.enums.parse_mode import ParseMode
+from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
 
 import config
 from storage import upsert_chat
@@ -91,7 +92,10 @@ async def main():
         log.info("Запускаем бота")
         already_logged.add("Запускаем бота")
 
-    bot = Bot(token=config.BOT_TOKEN, parse_mode=ParseMode.HTML)
+    bot = Bot(
+    token=config.BOT_TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+)
     dp = Dispatcher()
 
     dp.errors.register(global_error_handler)

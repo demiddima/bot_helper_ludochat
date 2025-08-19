@@ -74,3 +74,29 @@ def get_projects_text() -> str:
 def get_doctors_text() -> str:
     """Секция «Врачи»."""
     return _read_file(DOCTORS_FILE, DEFAULT_DOC_TEXT)
+
+# ===== Тексты для меню и экрана «Рассылки» =====
+
+DEFAULT_SUBSCRIPTIONS_TEXT = (
+    "<b>Управление рассылками</b>\n\n"
+    "• <b>Новости</b> — апдейты проекта, статьи, релизы.\n"
+    "• <b>Встречи</b> — анонсы встреч/созвонов.\n"
+    "• <b>Важные послания</b> — редкие, но критичные сообщения.\n\n"
+    "Текущее состояние:\n"
+    "— Новости: {news}\n"
+    "— Встречи: {meetings}\n"
+    "— Важные послания: {important}\n\n"
+    "<i>Этап 1: демонстрация без сохранения в БД.</i>"
+)
+
+def get_subscriptions_text(news: bool, meetings: bool, important: bool) -> str:
+    """Текстовое описание состояния подписок (заглушка)."""
+    return DEFAULT_SUBSCRIPTIONS_TEXT.format(
+        news="Вкл" if news else "Выкл",
+        meetings="Вкл" if meetings else "Выкл",
+        important="Вкл" if important else "Выкл"
+    )
+
+def get_menu_title_text() -> str:
+    """Заголовок меню (жирным)."""
+    return "<b>Доступные разделы:</b>"
