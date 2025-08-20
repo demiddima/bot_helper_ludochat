@@ -12,13 +12,19 @@ from datetime import datetime
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
-from aiogram.client.default import DefaultBotProperties
+
+# Безопасный импорт для разных версий aiogram
+try:
+    from aiogram.client.default import DefaultBotProperties  # aiogram 3.7+
+except Exception:
+    DefaultBotProperties = None
 
 import config
-from storage import upsert_chat
+from storage import upsert_chat, get_chats as storage_get_chats
 from services.db_api_client import db_api_client
 from handlers.join import router as join_router
 from handlers.commands import router as commands_router
+from handlers.join.menu import router as menu_router  # меню/рассылки
 
 # Флаг для проверки повторных логов
 already_logged = set()
@@ -26,6 +32,7 @@ already_logged = set()
 # Флаги для проверки подключения роутеров
 join_router_added = False
 commands_router_added = False
+menu_router_added = False
 
 # Глобальная переменная для отслеживания чатов
 tracked_chats: set = set()
@@ -85,6 +92,17 @@ async def global_error_handler(*args) -> bool:
     return True
 
 
+async def _warmup_tracked_chats(log: logging.Logger):
+    """Неблокирующий прогрев списка чатов: если БД недоступна — просто пишем лог и не падаем."""
+    global tracked_chats
+    try:
+        data = await storage_get_chats()
+        tracked_chats = set(data)
+        log.info(f"tracked_chats (warmup): {tracked_chats}")
+    except Exception as e:
+        log.error("Не удалось получить список чатов (warmup), продолжим без него", exc_info=True)
+
+
 async def main():
     log = logging.getLogger(__name__)
 
@@ -92,26 +110,30 @@ async def main():
         log.info("Запускаем бота")
         already_logged.add("Запускаем бота")
 
-    bot = Bot(
-    token=config.BOT_TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
-)
-    dp = Dispatcher()
+    # Инициализация бота (совместимость 3.6/3.7+)
+    if DefaultBotProperties is not None:
+        bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+        log.info("Инициализация Bot: aiogram>=3.7 (DefaultBotProperties)")
+    else:
+        bot = Bot(token=config.BOT_TOKEN, parse_mode=ParseMode.HTML)
+        log.info("Инициализация Bot: aiogram<=3.6 (parse_mode в конструкторе)")
 
+    dp = Dispatcher()
     dp.errors.register(global_error_handler)
 
-    global join_router_added, commands_router_added
+    global join_router_added, commands_router_added, menu_router_added
     if not join_router_added:
         dp.include_router(join_router)
         join_router_added = True
     if not commands_router_added:
         dp.include_router(commands_router)
         commands_router_added = True
+    if not menu_router_added:
+        dp.include_router(menu_router)
+        menu_router_added = True
 
-    global tracked_chats
-    tracked_chats_data = await db_api_client.get_chats()
-    tracked_chats = set(tracked_chats_data)
-    log.info(f"tracked_chats: {tracked_chats}")
+    # Стартуем фоновой прогрев чатов (не блокируем запуск)
+    asyncio.create_task(_warmup_tracked_chats(log))
 
     me = await bot.get_me()
     config.BOT_ID = me.id
