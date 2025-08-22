@@ -29,6 +29,7 @@ from storage import upsert_chat, get_chats as storage_get_chats
 from services.broadcasts import run_broadcast_worker
 from handlers import router as handlers_router   # единый агрегатор
 from config import ERROR_LOG_CHANNEL_ID, ID_ADMIN_USER
+from utils.time_msk import now_msk_naive  # ← МСК-naive время
 
 # Флаг для проверки повторных логов
 already_logged = set()
@@ -62,8 +63,8 @@ def _chunk_text(text: str, limit: int = 4096):
             cut = end
         yield text[start:cut]
         start = cut
-        
-# замени существующую функцию на эту версию
+
+# Универсальный обработчик ошибок
 async def global_error_handler(*args: Any) -> bool:
     """
     Универсальный обработчик ошибок:
@@ -163,8 +164,12 @@ async def main():
     # Стартуем фоновые задачи (не блокируем запуск)
     asyncio.create_task(_warmup_tracked_chats(log))
 
-    # ⬇️ Фоновый воркер рассылок (интервал задаётся в .env через BROADCAST_WORKER_INTERVAL, если есть)
-    interval = getattr(config, "BROADCAST_WORKER_INTERVAL", 20)
+    # ⬇️ Фоновый воркер рассылок: интервал из .env/config, дефолт 900 сек (15 мин)
+    _raw_interval = os.getenv("BROADCAST_WORKER_INTERVAL") or getattr(config, "BROADCAST_WORKER_INTERVAL", 900)
+    try:
+        interval = int(_raw_interval)
+    except Exception:
+        interval = 900
     asyncio.create_task(run_broadcast_worker(bot, interval_seconds=interval))
 
     me = await bot.get_me()
@@ -173,7 +178,8 @@ async def main():
         "id": me.id,
         "title": me.username or "",
         "type": "private",
-        "added_at": datetime.utcnow().isoformat()
+        # МСК-naive метка, без UTC:
+        "added_at": now_msk_naive().isoformat()
     })
 
     if f"Registered bot chat: {me.id}" not in already_logged:

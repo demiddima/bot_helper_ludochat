@@ -1,4 +1,4 @@
-# membership.py
+# handlers/join/membership.py
 # Корпоративный стиль логирования: [function] – user_id=… – описание, try/except для всех рисковых операций
 
 import asyncio
@@ -10,6 +10,7 @@ from aiogram.types import ChatMemberUpdated
 from httpx import HTTPStatusError
 
 from utils import cleanup_join_requests, log_and_report, get_bot
+from utils.time_msk import now_msk_naive  # ← добавили
 from storage import upsert_chat, add_user, add_membership, remove_membership
 from services.db_api_client import db_api_client
 import config
@@ -105,7 +106,7 @@ async def on_startup():
             "id": config.BOT_ID,
             "title": me.username or "bot",
             "type": "private",
-            "added_at": datetime.utcnow().isoformat(),
+            "added_at": now_msk_naive().isoformat(),  # ← было datetime.utcnow().isoformat()
         })
         logging.info(
             f"user_id={config.BOT_ID} – Бот зарегистрирован в БД как private chat",
@@ -154,21 +155,7 @@ async def on_chat_member(update: ChatMemberUpdated):
         await log_and_report(exc, f"add_user user={user_id}")
 
     # 2) логика по статусу
-    if status == "restricted":
-        try:
-            await add_membership(user_id, chat_id)
-            logging.info(
-                f"user_id={user_id} – Фиксирован restricted в chat={chat_id}",
-                extra={"user_id": user_id}
-            )
-        except Exception as exc:
-            logging.error(
-                f"user_id={user_id} – Ошибка при фиксации restricted: {exc}",
-                extra={"user_id": user_id}
-            )
-            await log_and_report(exc, f"add_membership restricted user={user_id}, chat={chat_id}")
-
-    elif status == "member":
+    if status == "member":
         try:
             await add_membership(user_id, chat_id)
             logging.info(
@@ -181,6 +168,20 @@ async def on_chat_member(update: ChatMemberUpdated):
                 extra={"user_id": user_id}
             )
             await log_and_report(exc, f"add_membership member user={user_id}, chat={chat_id}")
+
+    elif status == "restricted":
+        try:
+            await add_membership(user_id, chat_id)
+            logging.info(
+                f"user_id={user_id} – Фиксирован restricted в chat={chat_id}",
+                extra={"user_id": user_id}
+            )
+        except Exception as exc:
+            logging.error(
+                f"user_id={user_id} – Ошибка при фиксации restricted: {exc}",
+                extra={"user_id": user_id}
+            )
+            await log_and_report(exc, f"add_membership restricted user={user_id}, chat={chat_id}")
 
     elif status in ("left", "kicked"):
         try:
@@ -219,7 +220,7 @@ async def on_my_chat_member(update: ChatMemberUpdated):
                 "id": chat_id,
                 "title": update.chat.title or "",
                 "type": update.chat.type,
-                "added_at": datetime.utcnow().isoformat(),
+                "added_at": now_msk_naive().isoformat(),  # ← было datetime.utcnow().isoformat()
             })
             await add_membership(config.BOT_ID, chat_id)
             logging.info(

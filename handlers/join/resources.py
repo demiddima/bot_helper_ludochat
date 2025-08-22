@@ -1,9 +1,8 @@
-# resources.py
+# handlers/join/resources.py
 # Корпоративный стиль логирования: [function] – user_id=… – описание, try/except для всех рисковых операций
 
 import os
 import logging
-from datetime import datetime, timedelta, timezone
 
 from aiogram import Router, F
 from aiogram.types import (
@@ -23,6 +22,7 @@ from services.invite_service import generate_invite_links
 import messages  # тексты выносим сюда
 
 router = Router()
+
 
 async def send_chunked_message(chat_id: int, text: str, **kwargs):
     func_name = "send_chunked_message"
@@ -46,7 +46,7 @@ async def send_chunked_message(chat_id: int, text: str, **kwargs):
 
     for start in range(0, len(text), 4096):
         try:
-            await bot.send_message(chat_id, text[start:start+4096], **kwargs)
+            await bot.send_message(chat_id, text[start:start + 4096], **kwargs)
         except Exception as e:
             logging.error(
                 f"user_id={chat_id} – Ошибка при отправке chunked message: {e}",
@@ -54,13 +54,14 @@ async def send_chunked_message(chat_id: int, text: str, **kwargs):
             )
             try:
                 kwargs.pop("reply_markup", None)
-                await bot.send_message(chat_id, text[start:start+4096])
+                await bot.send_message(chat_id, text[start:start + 4096])
             except Exception as ee:
                 logging.error(
                     f"user_id={chat_id} – Повторная ошибка отправки chunked message: {ee}",
                     extra={"user_id": chat_id}
                 )
                 break
+
 
 async def read_advertisement_file(file_name):
     func_name = "read_advertisement_file"
@@ -75,6 +76,7 @@ async def read_advertisement_file(file_name):
         )
         return ""
 
+
 async def send_resources_message(bot, user, uid, refresh=False, previous_message_id=None):
     """
     Отправляет сообщение с ресурсами и кастомным меню (inline).
@@ -83,8 +85,6 @@ async def send_resources_message(bot, user, uid, refresh=False, previous_message
     """
     func_name = "send_resources_message"
     try:
-        now = datetime.utcnow().replace(tzinfo=timezone.utc)
-
         bot_info = await bot.get_me()
         logging.debug(
             f"user_id={uid} – user: {user.full_name} (@{user.username or 'нет'}), bot: @{bot_info.username}, ID: {bot_info.id}",
@@ -185,6 +185,7 @@ async def send_resources_message(bot, user, uid, refresh=False, previous_message
             extra={"user_id": uid}
         )
         raise
+
 
 @router.callback_query(F.data.startswith("refresh_"))
 async def on_refresh(query: CallbackQuery):
