@@ -5,6 +5,7 @@ import logging
 import asyncio
 import traceback
 from typing import Dict
+from datetime import datetime
 
 from tenacity import retry, stop_after_delay, wait_fixed, retry_if_exception_type, RetryCallState
 from httpx import AsyncClient, RequestError
@@ -90,3 +91,6 @@ async def log_and_report(error: Exception, context: str) -> None:
         await bot.send_message(ERROR_LOG_CHANNEL_ID, f"Ошибка в {context}: {error}")
     except Exception as e:
         logging.error(f"[log_and_report] - Не удалось отправить сообщение об ошибке: {e}\n{traceback.format_exc()}")
+        
+def dt_to_iso(dt: datetime | None) -> str | None:
+    return None if dt is None else dt.replace(microsecond=0).isoformat()

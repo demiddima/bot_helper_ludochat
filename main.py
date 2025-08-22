@@ -1,3 +1,6 @@
+# main.py
+# Подключение админ-команд для рассылок и фонового воркера run_broadcast_worker.
+
 import logger
 logger.configure_logging()
 
@@ -7,6 +10,8 @@ import asyncio
 import logging
 import html                    # для html.escape
 from utils import get_bot
+from typing import Any
+import traceback
 
 from datetime import datetime
 from aiohttp import web
@@ -21,18 +26,12 @@ except Exception:
 
 import config
 from storage import upsert_chat, get_chats as storage_get_chats
-from services.db_api_client import db_api_client
-from handlers.join import router as join_router
-from handlers.commands import router as commands_router
-from handlers.join.menu import router as menu_router  # меню/рассылки
+from services.broadcasts import run_broadcast_worker
+from handlers import router as handlers_router   # единый агрегатор
+from config import ERROR_LOG_CHANNEL_ID, ID_ADMIN_USER
 
 # Флаг для проверки повторных логов
 already_logged = set()
-
-# Флаги для проверки подключения роутеров
-join_router_added = False
-commands_router_added = False
-menu_router_added = False
 
 # Глобальная переменная для отслеживания чатов
 tracked_chats: set = set()
@@ -49,12 +48,29 @@ def _async_exception_handler(loop, context):
     logging.getLogger(__name__).error("Необработанная ошибка asyncio", exc_info=context.get("exception"))
 asyncio.get_event_loop().set_exception_handler(_async_exception_handler)
 
-
-async def global_error_handler(*args) -> bool:
+def _chunk_text(text: str, limit: int = 4096):
+    """Режет текст на части длиной ≤ limit, стараясь резать по границам строк."""
+    if not text:
+        return
+    start = 0
+    n = len(text)
+    while start < n:
+        end = min(start + limit, n)
+        # попробуем отмотать до ближайшего перевода строки
+        cut = text.rfind("\n", start, end)
+        if cut == -1 or cut <= start + limit // 2:
+            cut = end
+        yield text[start:cut]
+        start = cut
+        
+# замени существующую функцию на эту версию
+async def global_error_handler(*args: Any) -> bool:
     """
     Универсальный обработчик ошибок:
-    - Поддерживает старую (exception) и новую (update, exception) сигнатуры.
-    - Делит слишком длинные сообщения на части ≤4096 символов.
+    - Поддерживает сигнатуры (exception) и (update, exception).
+    - Экранирует HTML и режет текст на куски ≤4096 символов.
+    - Шлёт в ERROR_LOG_CHANNEL_ID (если задан), иначе первому ID из ID_ADMIN_USER.
+    Возвращает True, чтобы не прерывать пайплайн aiogram.
     """
     if len(args) == 2:
         update, exception = args
@@ -65,29 +81,49 @@ async def global_error_handler(*args) -> bool:
         return True
 
     log = logging.getLogger(__name__)
-    log.exception(f"Необработанное исключение: {exception}", exc_info=True)
+    log.exception("Необработанное исключение: %s", exception, exc_info=True)
 
-    error_text = f"❗️<b>Ошибка:</b>\n<pre>{html.escape(str(exception))}</pre>"
+    # целевой чат для алертов
+    target_chat_id = None
+    try:
+        target_chat_id = int(ERROR_LOG_CHANNEL_ID)
+    except Exception:
+        pass
+    if not target_chat_id:
+        try:
+            target_chat_id = next(iter(ID_ADMIN_USER)) if ID_ADMIN_USER else None
+        except Exception:
+            target_chat_id = None
+    if not target_chat_id:
+        return True  # Некуда слать — выходим.
+
     bot = get_bot()
-    max_len = 4096
 
-    for start in range(0, len(error_text), max_len):
-        chunk = error_text[start:start + max_len]
+    # 1) стек
+    try:
+        tb = "".join(traceback.format_exception(type(exception), exception, exception.__traceback__))
+    except Exception:
+        tb = str(exception)
+    import html as _html
+    err_html = f"❗️<b>Ошибка</b>\n<pre>{_html.escape(tb)}</pre>"
+    for part in _chunk_text(err_html):
         try:
-            await bot.send_message(
-                config.ERROR_LOG_CHANNEL_ID,
-                chunk,
-                parse_mode=ParseMode.HTML,
-                disable_web_page_preview=True
-            )
-        except Exception as send_exc:
-            log.error(f"Не удалось отправить часть сообщения об ошибке: {send_exc}")
+            await bot.send_message(target_chat_id, part, disable_web_page_preview=True)
+        except Exception as e:
+            log.error("Не удалось отправить часть сообщения об ошибке: %s", e)
 
-    if update and hasattr(update, "message") and update.message:
+    # 2) сам update (если был)
+    if update is not None:
         try:
-            await update.message.answer("Произошла внутренняя ошибка, попробуйте позже.")
-        except Exception as user_exc:
-            log.error(f"Не удалось уведомить пользователя: {user_exc}")
+            try:
+                upd_str = update.model_dump_json(indent=2, ensure_ascii=False)  # pydantic v2
+            except Exception:
+                upd_str = str(update)
+            upd_html = f"<b>Update</b>\n<pre>{_html.escape(upd_str)}</pre>"
+            for part in _chunk_text(upd_html):
+                await bot.send_message(target_chat_id, part, disable_web_page_preview=True)
+        except Exception as e:
+            log.error("Не удалось отправить часть сообщения об ошибке: %s", e)
 
     return True
 
@@ -121,19 +157,15 @@ async def main():
     dp = Dispatcher()
     dp.errors.register(global_error_handler)
 
-    global join_router_added, commands_router_added, menu_router_added
-    if not join_router_added:
-        dp.include_router(join_router)
-        join_router_added = True
-    if not commands_router_added:
-        dp.include_router(commands_router)
-        commands_router_added = True
-    if not menu_router_added:
-        dp.include_router(menu_router)
-        menu_router_added = True
+    # Подключаем все роутеры из handlers
+    dp.include_router(handlers_router)
 
-    # Стартуем фоновой прогрев чатов (не блокируем запуск)
+    # Стартуем фоновые задачи (не блокируем запуск)
     asyncio.create_task(_warmup_tracked_chats(log))
+
+    # ⬇️ Фоновый воркер рассылок (интервал задаётся в .env через BROADCAST_WORKER_INTERVAL, если есть)
+    interval = getattr(config, "BROADCAST_WORKER_INTERVAL", 20)
+    asyncio.create_task(run_broadcast_worker(bot, interval_seconds=interval))
 
     me = await bot.get_me()
     config.BOT_ID = me.id

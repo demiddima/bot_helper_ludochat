@@ -1,6 +1,4 @@
 # common.py
-# Корпоративный стиль логирования: [function] – user_id=… – описание, безопасная обработка ошибок
-
 import logging
 from aiogram import Router, F
 from aiogram.types import Message

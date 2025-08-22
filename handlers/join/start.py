@@ -1,5 +1,5 @@
 # start.py
-# Обновление: Добавлен флаг SHOW_WELCOME — можно отключать сообщение согласия. Все действия фиксации сохраняются.
+# Этап 3: инициализация дефолтов подписок (OFF/ON/ON) после add_user_and_membership.
 
 import time
 import logging
@@ -19,6 +19,9 @@ from handlers.join.resources import send_resources_message, send_chunked_message
 from messages import get_welcome_text
 
 
+# ⬇️ Импортируем из services/subscriptions
+from services.subscriptions import ensure_user_subscriptions_defaults
+
 router = Router()
 
 @router.message(F.text.startswith("/start"))
@@ -27,7 +30,6 @@ async def process_start(message: Message):
     uid = message.from_user.id
     parts = message.text.split()
     bot_username = (await bot.get_me()).username or ""
-    func_name = "process_start"
 
     async def _safe_track(key: str):
         try:
@@ -38,17 +40,25 @@ async def process_start(message: Message):
                 extra={"user_id": uid}
             )
 
-    # В любом случае регистрируем пользователя и подписку
+    # 1) Регистрируем пользователя и membership в BOT_ID
     try:
         await membership.add_user_and_membership(message.from_user, config.BOT_ID)
+        # 2) Дефолты подписок OFF/ON/ON (идемпотентно)
+        try:
+            await ensure_user_subscriptions_defaults(uid)
+        except Exception as exc:
+            logging.error(
+                f"user_id={uid} – Ошибка инициализации подписок: {exc}",
+                extra={"user_id": uid}
+            )
     except Exception as exc:
         logging.exception(
             f"user_id={uid} – Ошибка add_user_and_membership: {exc}",
             extra={"user_id": uid}
         )
 
-    # Если SHOW_WELCOME выключен — сразу ставим галку и шлём ресурсы
-    if not config.SHOW_WELCOME:
+    # 3) Если SHOW_WELCOME=0 — сразу принимаем условия и шлём ресурсы
+    if not getattr(config, "SHOW_WELCOME", True):
         try:
             await set_user_accepted(uid)
             logging.info(
@@ -64,15 +74,18 @@ async def process_start(message: Message):
             asyncio.create_task(_safe_track(parts[1]))
         return await send_resources_message(bot, message.from_user, uid)
 
-    # Если уже приняли — шлём ресурсы
+    # 4) Если уже приняли условия — сразу ресурсы
     if await has_user_accepted(uid):
         if len(parts) == 2 and parts[1] not in ("start",) and not parts[1].startswith("verify_"):
             asyncio.create_task(_safe_track(parts[1]))
         return await send_resources_message(bot, message.from_user, uid)
 
-    # verify — подтверждение
+    # 5) Обработка verify_ подтверждения
     if len(parts) == 2 and parts[1].startswith("verify_"):
-        orig = int(parts[1].split("_", 1)[1])
+        try:
+            orig = int(parts[1].split("_", 1)[1])
+        except Exception:
+            orig = uid
         ts = join_requests.get(orig)
         if ts is None or time.time() - ts > 300:
             join_requests.pop(orig, None)
@@ -82,7 +95,7 @@ async def process_start(message: Message):
             )
             return await message.reply(
                 "⏰ Время ожидания вышло. Отправьте /start ещё раз.",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[  
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                     InlineKeyboardButton(
                         text="/start",
                         url=f"https://t.me/{bot_username}?start=start"
@@ -103,10 +116,10 @@ async def process_start(message: Message):
             )
         return await send_resources_message(bot, message.from_user, orig)
 
-    # Первый /start – приветствие
+    # 6) Первый /start – показываем приветствие с подтверждением
     join_requests[uid] = time.time()
     confirm_link = f"https://t.me/{bot_username}?start=verify_{uid}"
-    kb = InlineKeyboardMarkup(inline_keyboard=[[  
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(
             text="✅ Я согласен(а) и ознакомлен(а) со всем",
             url=confirm_link
