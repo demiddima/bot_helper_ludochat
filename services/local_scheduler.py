@@ -1,6 +1,5 @@
 # services/local_scheduler.py
-# Локальный планировщик: при создании/переносе рассылки ставим asyncio-таску,
-# которая уснёт до назначенного времени и вызовет send_broadcast_now.
+# Локальный планировщик: спим до времени → POST /send_now → СРАЗУ try_send_now()
 
 from __future__ import annotations
 
@@ -8,11 +7,13 @@ import asyncio
 import logging
 from datetime import datetime
 from typing import Dict, Optional
-
 from zoneinfo import ZoneInfo
+
+from aiogram import Bot
 
 import config
 from services.db_api import db_api_client
+from services.broadcasts import try_send_now
 from utils.common import log_and_report  # отчёт в ERROR_LOG_CHANNEL_ID
 
 log = logging.getLogger(__name__)
@@ -38,82 +39,89 @@ def _seconds_until(run_at: datetime, now: Optional[datetime] = None) -> float:
     return max(0.0, delta)
 
 
-async def _send_when_due(broadcast_id: int, run_at: datetime) -> None:
+async def _send_when_due(bot: Bot, broadcast_id: int, run_at: datetime) -> None:
     try:
         delay = _seconds_until(run_at)
         if delay > 0:
             try:
-                logging.info(
-                    "Локальная задача: уснём до отправки — рассылка=%s, задержка=%.3fс, плановое=%s",
+                log.info(
+                    "[local_scheduler] Уснём до отправки — рассылка=%s, задержка=%.3fs, плановое=%s",
                     broadcast_id, delay, run_at.isoformat(),
                     extra={"user_id": config.BOT_ID},
                 )
                 await asyncio.sleep(delay)
             except asyncio.CancelledError:
-                logging.info(
-                    "Локальная задача: отменена до отправки — рассылка=%s",
+                log.info(
+                    "[local_scheduler] Отменена до отправки — рассылка=%s",
                     broadcast_id,
                     extra={"user_id": config.BOT_ID},
                 )
                 return
 
-        # Срок наступил или уже просрочено — запрашиваем отправку
+        # Срок наступил или уже просрочено — запрашиваем отправку на бэке
         try:
-            logging.info(
-                "Локальная задача: запрашиваем отправку — рассылка=%s, плановое=%s",
+            log.info(
+                "[local_scheduler] Запрашиваем отправку — рассылка=%s, плановое=%s",
                 broadcast_id, run_at.isoformat(),
                 extra={"user_id": config.BOT_ID},
             )
             await db_api_client.send_broadcast_now(broadcast_id)
-            logging.info(
-                "Локальная задача: запрос на отправку принят — рассылка=%s",
+            log.info(
+                "[local_scheduler] Запрос на отправку принят — рассылка=%s",
                 broadcast_id,
                 extra={"user_id": config.BOT_ID},
             )
         except Exception as exc:
-            logging.error(
-                "Локальная задача: не удалось отправить — рассылка=%s, ошибка=%s",
+            log.error(
+                "[local_scheduler] Не удалось отправить — рассылка=%s, ошибка=%s",
                 broadcast_id, exc,
                 extra={"user_id": config.BOT_ID},
             )
             await log_and_report(exc, f"локальная отправка, id={broadcast_id}")
+            return
+        finally:
+            _tasks.pop(broadcast_id, None)
+
+        # Немедленно пытаемся отправить с клиента, не ждём воркер
+        try:
+            await try_send_now(bot, broadcast_id)
+        except Exception as exc:
+            log.error("[local_scheduler] try_send_now failed — id=%s: %s", broadcast_id, exc)
 
     except Exception as exc:
-        logging.error(
-            "Локальная задача: критическая ошибка — рассылка=%s, ошибка=%s",
+        log.error(
+            "[local_scheduler] Критическая ошибка — рассылка=%s, ошибка=%s",
             broadcast_id, exc,
             extra={"user_id": config.BOT_ID},
         )
         await log_and_report(exc, f"локальная задача, id={broadcast_id}")
 
 
-def schedule_broadcast_send(broadcast_id: int, run_at: datetime) -> None:
+def schedule_broadcast_send(bot: Bot, broadcast_id: int, run_at: datetime) -> None:
     """
     Ставит/переставляет локальную задачу на указанное время (aware datetime).
     Если задача уже была — отменяет и ставит заново.
     """
     try:
-        # Отменяем предыдущую задачу, если она есть
         old = _tasks.pop(broadcast_id, None)
         if old and not old.done():
             old.cancel()
-            logging.info(
-                "Локальная задача: прежняя отменена — рассылка=%s",
+            log.info(
+                "[local_scheduler] Прежняя задача отменена — рассылка=%s",
                 broadcast_id,
                 extra={"user_id": config.BOT_ID},
             )
 
-        # Ставим новую
-        task = asyncio.create_task(_send_when_due(broadcast_id, run_at))
+        task = asyncio.create_task(_send_when_due(bot, broadcast_id, run_at))
         _tasks[broadcast_id] = task
-        logging.info(
-            "Локальная задача: запланирована — рассылка=%s, время=%s",
+        log.info(
+            "[local_scheduler] Задача запланирована — рассылка=%s, время=%s",
             broadcast_id, run_at.isoformat(),
             extra={"user_id": config.BOT_ID},
         )
     except Exception as exc:
-        logging.error(
-            "Локальная задача: ошибка планирования — рассылка=%s, ошибка=%s",
+        log.error(
+            "[local_scheduler] Ошибка планирования — рассылка=%s, ошибка=%s",
             broadcast_id, exc,
             extra={"user_id": config.BOT_ID},
         )
@@ -130,20 +138,20 @@ def cancel_broadcast_send(broadcast_id: int) -> None:
         old = _tasks.pop(broadcast_id, None)
         if old and not old.done():
             old.cancel()
-            logging.info(
-                "Локальная задача: отменена — рассылка=%s",
+            log.info(
+                "[local_scheduler] Отменена — рассылка=%s",
                 broadcast_id,
                 extra={"user_id": config.BOT_ID},
             )
         else:
-            logging.info(
-                "Локальная задача: активной задачи нет — рассылка=%s",
+            log.info(
+                "[local_scheduler] Активной задачи нет — рассылка=%s",
                 broadcast_id,
                 extra={"user_id": config.BOT_ID},
             )
     except Exception as exc:
-        logging.error(
-            "Локальная задача: ошибка отмены — рассылка=%s, ошибка=%s",
+        log.error(
+            "[local_scheduler] Ошибка отмены — рассылка=%s, ошибка=%s",
             broadcast_id, exc,
             extra={"user_id": config.BOT_ID},
         )

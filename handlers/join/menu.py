@@ -1,6 +1,6 @@
 # handlers/join/menu.py
-# Меню и управление рассылками (Этап 2: реальный API)
-# Корп. логи: [function] – user_id=… – описание
+# Меню и управление рассылками (актуальная версия)
+# Корп. логи: – user_id=… – описание (имя функции логгер сам подставит)
 
 import logging
 from aiogram import Router, F
@@ -25,6 +25,7 @@ router = Router(name="menu")
 def _kb_label(name: str, state: bool) -> str:
     return f"{name}: {'Вкл' if state else 'Выкл'}"
 
+
 def _subs_kb(news: bool, meetings: bool, important: bool) -> InlineKeyboardMarkup:
     """
     Раскладка:
@@ -43,8 +44,10 @@ def _subs_kb(news: bool, meetings: bool, important: bool) -> InlineKeyboardMarku
         ]
     )
 
+
 def _extract_flags(rec: dict | None) -> tuple[bool, bool, bool]:
     if not rec:
+        # наши дефолты: news=False, meetings=True, important=True
         return False, True, True
     return (
         bool(rec.get("news_enabled", False)),
@@ -56,14 +59,13 @@ def _extract_flags(rec: dict | None) -> tuple[bool, bool, bool]:
 @router.callback_query(F.data == "menu:open")
 async def on_menu_open(query: CallbackQuery):
     """
-    Нажатие inline-кнопки «🧭 Меню» из сообщения с ресурсами:
-    – НЕ редактируем исходное сообщение,
-    – отправляем НОВОЕ сообщение с жирным заголовком и Reply-клавиатурой.
+    Нажатие inline-кнопки «🧭 Меню»:
+    – не редактируем исходное сообщение,
+    – отправляем новое с заголовком и Reply-клавиатурой.
     """
-    func_name = "on_menu_open"
     uid = query.from_user.id
     try:
-        logging.info(f"[{func_name}] – user_id={uid} – нажата кнопка «Меню»", extra={"user_id": uid})
+        logging.info("user_id=%s – нажата кнопка «Меню»", uid, extra={"user_id": uid})
         await query.answer()
         kb = ReplyKeyboardMarkup(
             keyboard=[[KeyboardButton(text="📣 Рассылки")]],
@@ -77,21 +79,22 @@ async def on_menu_open(query: CallbackQuery):
             reply_markup=kb,
         )
     except Exception as e:
-        logging.error(f"[{func_name}] – user_id={uid} – Ошибка открытия меню: {e}", extra={"user_id": uid})
+        logging.error("user_id=%s – Ошибка открытия меню: %s", uid, e, extra={"user_id": uid})
 
 
 @router.message(F.text.in_({"Рассылки", "📣 Рассылки"}))
 async def on_menu_subscriptions_message(msg: Message):
     """
-    Раздел «Рассылки»: берём состояние из БД; если записи нет — создаём дефолты (OFF/ON/ON).
+    Раздел «Рассылки»: берём состояние из БД; если записи нет — создаём дефолты.
+    Никаких приписок «Этап 1…» — выводим только messages.get_subscriptions_text(...).
     """
-    func_name = "on_menu_subscriptions_message"
     uid = msg.from_user.id
     try:
-        logging.info(f"[{func_name}] – user_id={uid} – открываю «Рассылки» (GET state)", extra={"user_id": uid})
-        rec = await get_user_subscriptions(uid)   # {} если записи нет
+        logging.info("user_id=%s – открываю «Рассылки» (GET state)", uid, extra={"user_id": uid})
+
+        rec = await get_user_subscriptions(uid)
         if not rec:
-            logging.info(f"[{func_name}] – user_id={uid} – state отсутствует ⇒ создаю дефолты", extra={"user_id": uid})
+            logging.info("user_id=%s – state отсутствует ⇒ создаю дефолты", uid, extra={"user_id": uid})
             rec = await ensure_user_subscriptions_defaults(uid)
 
         news, meetings, important = _extract_flags(rec)
@@ -100,23 +103,51 @@ async def on_menu_subscriptions_message(msg: Message):
             reply_markup=_subs_kb(news, meetings, important),
         )
     except Exception as e:
-        logging.error(f"[{func_name}] – user_id={uid} – Ошибка открытия «Рассылки»: {e}", extra={"user_id": uid})
+        logging.error("user_id=%s – Ошибка открытия «Рассылки»: %s", uid, e, extra={"user_id": uid})
         try:
             await msg.answer("Не удалось открыть «Рассылки».")
         except Exception as ee:
-            logging.error(f"[{func_name}] – user_id={uid} – Ошибка ответа: {ee}", extra={"user_id": uid})
+            logging.error("user_id=%s – Ошибка ответа: %s", uid, ee, extra={"user_id": uid})
+
+
+@router.callback_query(F.data == "subs:open")
+async def on_subs_open_cb(query: CallbackQuery):
+    """
+    Нажатие inline-кнопки «Настроить рассылки» внутри любого сообщения.
+    Открываем «📣 Рассылки» так же, как из меню.
+    """
+    uid = query.from_user.id
+    try:
+        logging.info("user_id=%s – открываю «Рассылки» (CB)", uid, extra={"user_id": uid})
+        await query.answer()
+
+        rec = await get_user_subscriptions(uid)
+        if not rec:
+            logging.info("user_id=%s – state отсутствует ⇒ создаю дефолты (CB)", uid, extra={"user_id": uid})
+            rec = await ensure_user_subscriptions_defaults(uid)
+
+        news, meetings, important = _extract_flags(rec)
+        await query.message.answer(
+            messages.get_subscriptions_text(news, meetings, important),
+            reply_markup=_subs_kb(news, meetings, important),
+        )
+    except Exception as e:
+        logging.error("user_id=%s – Ошибка открытия «Рассылки» (CB): %s", uid, e, extra={"user_id": uid})
+        try:
+            await query.message.answer("Не удалось открыть «Рассылки».")
+        except Exception as ee:
+            logging.error("user_id=%s – Ошибка ответа (CB): %s", uid, ee, extra={"user_id": uid})
 
 
 @router.callback_query(F.data.startswith("subs:toggle:"))
 async def on_subs_toggle(query: CallbackQuery):
     """
-    Переключатели: делаем POST /subscriptions/{user_id}/toggle и перерисовываем экран.
+    Тумблеры: дергаем toggle в хранилище и перерисовываем экран.
     """
-    func_name = "on_subs_toggle"
     uid = query.from_user.id
     try:
         kind = query.data.split(":")[-1]  # news|meetings|important
-        logging.info(f"[{func_name}] – user_id={uid} – toggle kind={kind}", extra={"user_id": uid})
+        logging.info("user_id=%s – toggle kind=%s", uid, kind, extra={"user_id": uid})
 
         rec = await toggle_user_subscription(uid, kind)
         news, meetings, important = _extract_flags(rec)
@@ -127,5 +158,5 @@ async def on_subs_toggle(query: CallbackQuery):
         )
         await query.answer("Обновлено")
     except Exception as e:
-        logging.error(f"[{func_name}] – user_id={uid} – Ошибка toggle: {e}", extra={"user_id": uid})
+        logging.error("user_id=%s – Ошибка toggle: %s", uid, e, extra={"user_id": uid})
         await query.answer("Не получилось переключить", show_alert=False)
