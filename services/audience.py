@@ -193,9 +193,9 @@ async def iter_audience_kind(kind: str) -> AsyncIterator[int]:
 
 # ---------- РАЗВОРАЧИВАНИЕ TARGET ДЛЯ РАССЫЛОК (через бэкенд) ----------
 
-async def resolve_audience(target: Optional[dict], limit: int = 200_000) -> list[int]:
+async def resolve_audience(target: Optional[dict], limit: Optional[int] = None) -> list[int]:
     """
-    ПОЛНАЯ материализация аудитории через /audiences/resolve.
+    Если limit=None — бэку лимит не передаём вовсе (берём всех).
     target:
       - {"type":"ids","user_ids":[...]} | {"type":"ids","ids":[...]}
       - {"type":"kind","kind":"news|meetings|important"}
@@ -210,13 +210,12 @@ async def resolve_audience(target: Optional[dict], limit: int = 200_000) -> list
         logging.warning("resolve_audience: target отсутствует")
         return []
 
-    # Совместимость: ids может приехать в поле "ids"
+    # Совместимость: ids → user_ids
     if target.get("type") == "ids" and "ids" in target and "user_ids" not in target:
         target = dict(target)
         target["user_ids"] = target.pop("ids")
 
     try:
-        # ВАЖНО: передаём САМ target, а не {"target": target, "limit": ...}
         resp = await db_api_client.audiences_resolve(target, limit=limit)
         ids = resp.get("ids") or []
 
@@ -239,7 +238,6 @@ async def resolve_audience(target: Optional[dict], limit: int = 200_000) -> list
         logging.error("resolve_audience: ошибка API /audiences/resolve: %s", exc, extra={"user_id": config.BOT_ID})
         await log_and_report(exc, "resolve_audience: ошибка API")
         return []
-
 
 __all__ = [
     "normalize_ids",

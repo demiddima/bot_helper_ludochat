@@ -193,14 +193,19 @@ async def post_cancel(cb: CallbackQuery, state: FSMContext):
 
 @router.callback_query(PostWizard.choose_audience, F.data == "aud:all")
 async def aud_all(cb: CallbackQuery, state: FSMContext):
-    try:
-        ids = await materialize_all_user_ids()
-    except Exception as e:
-        await cb.answer("Ошибка получения пользователей", show_alert=True)
-        log.error("Аудитория ALL: ошибка=%s", e, extra={"user_id": cb.from_user.id})
+    # Тип рассылки должен быть выбран раньше
+    data = await state.get_data()
+    kind = (data or {}).get("kind")
+
+    if kind not in {"news", "meetings", "important"}:
+        await cb.answer("Сначала выбери тип рассылки", show_alert=True)
         return
-    target = {"type": "ids", "user_ids": ids}
+
+    # Формируем target на основе типа
+    target = {"type": "kind", "kind": kind}
     await state.update_data(target=target)
+
+    # Превью — только сэмпл (не ограничивает реальную отправку)
     prev = await audience_preview_text(target)
     await state.set_state(PostWizard.choose_schedule)
     await cb.message.edit_text(f"{prev}\n\nТеперь выбери расписание.", reply_markup=kb_schedule())

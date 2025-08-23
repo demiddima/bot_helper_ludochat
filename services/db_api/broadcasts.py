@@ -159,13 +159,16 @@ class BroadcastsMixin(BaseApi):
             )
             raise
         
-    async def audiences_resolve(self, target_payload: Dict[str, Any], limit: int = 200_000) -> Dict[str, Any]:
+    async def audiences_resolve(self, target_payload: Dict[str, Any], limit: Optional[int] = None) -> Dict[str, Any]:
         """
         POST /audiences/resolve
-        body: {"target": <target_payload>, "limit": <int>}
+        body: {"target": <target_payload>, "limit": <int>}  # если limit не None
         -> {"total": int, "ids": [int,...]}
         """
-        r = await self.client.post("/audiences/resolve", json={"target": target_payload, "limit": limit})
+        payload: Dict[str, Any] = {"target": target_payload}
+        if limit is not None:
+            payload["limit"] = int(limit)
+        r = await self.client.post("/audiences/resolve", json=payload)
         r.raise_for_status()
         return r.json()
 
