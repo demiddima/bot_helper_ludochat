@@ -17,6 +17,51 @@ from .sender import send_media
 
 log = logging.getLogger(__name__)
 
+# сколько результатов копим в буфере перед /deliveries/report
+REPORT_BATCH = 200
+
+
+async def _try_materialize(broadcast_id: int, user_ids: List[int]) -> None:
+    """
+    Создаём pending-записи в broadcast_deliveries.
+    Если метод клиента пока не реализован — пропускаем, не ломая поток.
+    """
+    if not user_ids:
+        return
+    try:
+        limit = min(max(1000, len(user_ids)), 200_000)
+        res = await db_api_client.deliveries_materialize(
+            broadcast_id, payload={"ids": user_ids, "limit": limit}
+        )
+        log.info(
+            "materialize: id=%s total=%s created=%s existed=%s",
+            broadcast_id, res.get("total"), res.get("created"), res.get("existed")
+        )
+    except AttributeError:
+        # мягкий fallback: метод ещё не добавлен в клиент
+        log.debug("deliveries_materialize отсутствует в db_api_client — шаг пропускаю")
+    except Exception as e:
+        log.warning("materialize %s: ошибка %s", broadcast_id, e)
+
+
+async def _try_report(broadcast_id: int, items: List[Dict[str, Any]]) -> None:
+    """
+    Батч-репорт результатов доставки (sent/failed/…).
+    Если метод клиента пока не реализован — пропускаем.
+    """
+    if not items:
+        return
+    try:
+        res = await db_api_client.deliveries_report(broadcast_id, items=items)
+        log.debug(
+            "report %s: processed=%s updated=%s inserted=%s",
+            broadcast_id, res.get("processed"), res.get("updated"), res.get("inserted")
+        )
+    except AttributeError:
+        log.debug("deliveries_report отсутствует в db_api_client — шаг пропускаю")
+    except Exception as e:
+        log.warning("report %s: ошибка %s", broadcast_id, e)
+
 
 async def send_broadcast(bot: Bot, broadcast: dict, throttle_per_sec: Optional[int] = None) -> Tuple[int, int]:
     """Основная отправка рассылки по её описанию из БД."""
@@ -68,20 +113,36 @@ async def send_broadcast(bot: Bot, broadcast: dict, throttle_per_sec: Optional[i
         log.warning("Рассылка id=%s не отправлена: аудитория пустая", bid)
         return 0, 0
 
+    # 4.1 Материализуем pending (идемпотентно; если метод ещё не добавлен — шаг тихо пропустится)
+    await _try_materialize(bid, audience)
+
     log.info("Начинаю рассылку id=%s: аудитория=%s, скорость=%s msg/с", bid, len(audience), rate)
 
-    # 5. Цикл отправки
+    # 5. Цикл отправки + батч-репорт
     sent = 0
     failed = 0
+    report_buf: List[Dict[str, Any]] = []
+
     for uid in audience:
         ok = await send_media(bot, uid, media)
         if ok:
             sent += 1
+            report_buf.append({"user_id": uid, "status": "sent"})
             log.debug("Сообщение отправлено пользователю %s (id рассылки=%s)", uid, bid)
         else:
             failed += 1
+            report_buf.append({"user_id": uid, "status": "failed"})
             log.debug("Ошибка при отправке пользователю %s (id рассылки=%s)", uid, bid)
+
+        if len(report_buf) >= REPORT_BATCH:
+            await _try_report(bid, report_buf)
+            report_buf.clear()
+
         await asyncio.sleep(window)
+
+    # добросим хвост буфера
+    if report_buf:
+        await _try_report(bid, report_buf)
 
     # 6. Итог
     if sent == 0 and failed > 0:

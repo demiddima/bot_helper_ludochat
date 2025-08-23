@@ -158,3 +158,50 @@ class BroadcastsMixin(BaseApi):
                 broadcast_id, status, limit, offset, e, extra={"user_id": None}
             )
             raise
+        
+    async def audiences_resolve(self, target_payload: Dict[str, Any], limit: int = 200_000) -> Dict[str, Any]:
+        """
+        POST /audiences/resolve
+        body: {"target": <target_payload>, "limit": <int>}
+        -> {"total": int, "ids": [int,...]}
+        """
+        r = await self.client.post("/audiences/resolve", json={"target": target_payload, "limit": limit})
+        r.raise_for_status()
+        return r.json()
+
+    async def deliveries_materialize(self, broadcast_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        POST /broadcasts/{id}/deliveries/materialize
+        payload = {"ids":[...]} ИЛИ {"target": {...}}, "limit": N
+        -> {"total": int, "created": int, "existed": int}
+        """
+        try:
+            r = await self.client.post(f"/broadcasts/{broadcast_id}/deliveries/materialize", json=payload)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            log.error(
+                "Доставки: ошибка materialize — id=%s, payload_keys=%s, ошибка=%s",
+                broadcast_id, sorted(list(payload.keys())) if isinstance(payload, dict) else "n/a",
+                e, extra={"user_id": None}
+            )
+            raise
+
+    async def deliveries_report(self, broadcast_id: int, items: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        POST /broadcasts/{id}/deliveries/report
+        payload = {"items":[{"user_id":..., "status":"sent|failed|skipped|pending",
+                             "message_id":?, "error_code":?, "error_message":?, "sent_at":?}, ...]}
+        -> {"processed": int, "updated": int, "inserted": int}
+        """
+        try:
+            r = await self.client.post(f"/broadcasts/{broadcast_id}/deliveries/report", json={"items": items})
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            log.error(
+                "Доставки: ошибка report — id=%s, batch=%s, ошибка=%s",
+                broadcast_id, len(items) if isinstance(items, list) else "n/a",
+                e, extra={"user_id": None}
+            )
+            raise
