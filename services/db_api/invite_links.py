@@ -22,7 +22,10 @@ class InviteLinksMixin(BaseApi):
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            log.error("[save_invite_link] – user_id=%s – Ошибка: %s", user_id, e, extra={"user_id": user_id})
+            log.error(
+                "Инвайт-ссылки: ошибка сохранения — user_id=%s, chat_id=%s, ошибка=%s",
+                user_id, chat_id, e, extra={"user_id": user_id}
+            )
             raise
 
     async def get_all_invite_links(self, user_id: int) -> Dict:
@@ -31,7 +34,10 @@ class InviteLinksMixin(BaseApi):
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            log.error("[get_all_invite_links] – user_id=%s – Ошибка: %s", user_id, e, extra={"user_id": user_id})
+            log.error(
+                "Инвайт-ссылки: ошибка получения всех ссылок — user_id=%s, ошибка=%s",
+                user_id, e, extra={"user_id": user_id}
+            )
             raise
 
     async def delete_invite_links(self, user_id: int) -> None:
@@ -39,5 +45,8 @@ class InviteLinksMixin(BaseApi):
             r = await self.client.delete(f"/invite_links/{user_id}")
             r.raise_for_status()
         except Exception as e:
-            log.error("[delete_invite_links] – user_id=%s – Ошибка: %s", user_id, e, extra={"user_id": user_id})
+            log.error(
+                "Инвайт-ссылки: ошибка удаления — user_id=%s, ошибка=%s",
+                user_id, e, extra={"user_id": user_id}
+            )
             raise

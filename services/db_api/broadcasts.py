@@ -31,7 +31,10 @@ class BroadcastsMixin(BaseApi):
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            log.error("[create_broadcast] – Ошибка: %s", e)
+            log.error(
+                "Рассылки: ошибка создания — kind=%s, title=%s, статус=%s, время=%s, ошибка=%s",
+                kind, title, status, scheduled_at, e, extra={"user_id": created_by or None}
+            )
             raise
 
     async def get_broadcast(self, broadcast_id: int) -> Dict[str, Any]:
@@ -40,7 +43,7 @@ class BroadcastsMixin(BaseApi):
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            log.error("[get_broadcast] – id=%s – Ошибка: %s", broadcast_id, e)
+            log.error("Рассылки: ошибка получения — id=%s, ошибка=%s", broadcast_id, e, extra={"user_id": None})
             raise
 
     async def list_broadcasts(self, *, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
@@ -49,7 +52,7 @@ class BroadcastsMixin(BaseApi):
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            log.error("[list_broadcasts] – Ошибка: %s", e)
+            log.error("Рассылки: ошибка списка — limit=%s, offset=%s, ошибка=%s", limit, offset, e, extra={"user_id": None})
             raise
 
     async def update_broadcast(self, broadcast_id: int, **patch: object) -> Dict[str, Any]:
@@ -59,7 +62,7 @@ class BroadcastsMixin(BaseApi):
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            log.error("[update_broadcast] – id=%s – Ошибка: %s", broadcast_id, e)
+            log.error("Рассылки: ошибка обновления — id=%s, ошибка=%s", broadcast_id, e, extra={"user_id": None})
             raise
 
     async def delete_broadcast(self, broadcast_id: int) -> None:
@@ -67,7 +70,7 @@ class BroadcastsMixin(BaseApi):
             r = await self.client.delete(f"/broadcasts/{broadcast_id}")
             r.raise_for_status()
         except Exception as e:
-            log.error("[delete_broadcast] – id=%s – Ошибка: %s", broadcast_id, e)
+            log.error("Рассылки: ошибка удаления — id=%s, ошибка=%s", broadcast_id, e, extra={"user_id": None})
             raise
 
     # -------- memberships helper --------
@@ -77,7 +80,7 @@ class BroadcastsMixin(BaseApi):
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            log.error("[list_memberships_by_chat] chat_id=%s – Ошибка: %s", chat_id, e)
+            log.error("Подписки: ошибка списка по чату — chat_id=%s, ошибка=%s", chat_id, e, extra={"user_id": None})
             raise
 
     # -------- target/media/sending --------
@@ -87,7 +90,7 @@ class BroadcastsMixin(BaseApi):
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            log.error("[get_broadcast_target] id=%s – Ошибка: %s", broadcast_id, e)
+            log.error("Рассылки: ошибка получения таргета — id=%s, ошибка=%s", broadcast_id, e, extra={"user_id": None})
             raise
 
     async def put_broadcast_target(self, broadcast_id: int, target_payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -96,7 +99,7 @@ class BroadcastsMixin(BaseApi):
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            log.error("[put_broadcast_target] id=%s – Ошибка: %s", broadcast_id, e)
+            log.error("Рассылки: ошибка сохранения таргета — id=%s, ошибка=%s", broadcast_id, e, extra={"user_id": None})
             raise
 
     async def get_broadcast_media(self, broadcast_id: int) -> List[Dict[str, Any]]:
@@ -105,7 +108,7 @@ class BroadcastsMixin(BaseApi):
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            log.error("[get_broadcast_media] id=%s – Ошибка: %s", broadcast_id, e)
+            log.error("Рассылки: ошибка получения медиа — id=%s, ошибка=%s", broadcast_id, e, extra={"user_id": None})
             raise
 
     async def put_broadcast_media(self, broadcast_id: int, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -114,7 +117,10 @@ class BroadcastsMixin(BaseApi):
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            log.error("[put_broadcast_media] id=%s – Ошибка: %s", broadcast_id, e)
+            log.error(
+                "Рассылки: ошибка сохранения медиа — id=%s, элементов=%s, ошибка=%s",
+                broadcast_id, (len(items) if isinstance(items, list) else "n/a"), e, extra={"user_id": None}
+            )
             raise
 
     async def audience_preview(self, target_payload: Dict[str, Any], limit: int = 10000) -> Dict[str, Any]:
@@ -123,7 +129,10 @@ class BroadcastsMixin(BaseApi):
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            log.error("[audience_preview] – Ошибка: %s", e)
+            log.error(
+                "Аудитория: ошибка предпросмотра — тип=%s, лимит=%s, ошибка=%s",
+                target_payload.get("type"), limit, e, extra={"user_id": None}
+            )
             raise
 
     async def send_broadcast_now(self, broadcast_id: int) -> Dict[str, Any]:
@@ -132,7 +141,7 @@ class BroadcastsMixin(BaseApi):
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            log.error("[send_broadcast_now] id=%s – Ошибка: %s", broadcast_id, e)
+            log.error("Рассылки: ошибка немедленной отправки — id=%s, ошибка=%s", broadcast_id, e, extra={"user_id": None})
             raise
 
     async def list_deliveries(self, broadcast_id: int, status: Optional[str] = None, limit: int = 200, offset: int = 0) -> List[Dict[str, Any]]:
@@ -144,5 +153,8 @@ class BroadcastsMixin(BaseApi):
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            log.error("[list_deliveries] id=%s – Ошибка: %s", broadcast_id, e)
+            log.error(
+                "Рассылки: ошибка списка доставок — id=%s, status=%s, limit=%s, offset=%s, ошибка=%s",
+                broadcast_id, status, limit, offset, e, extra={"user_id": None}
+            )
             raise

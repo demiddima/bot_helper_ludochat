@@ -12,23 +12,25 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 async def _log_request(request: httpx.Request):
+    """Информируем о исходящем HTTP-запросе (русский текст, без имён функций)."""
     try:
-        log.info("[api] → %s %s", request.method, request.url)
+        log.info("HTTP запрос → %s %s", request.method, request.url, extra={"user_id": "system"})
     except Exception:
         pass
 
 
 async def _log_response(response: httpx.Response):
+    """Информируем об ответе; при 4xx/5xx дополнительно логируем сокращённое тело."""
     try:
         req = response.request
-        log.info("[api] ← %s %s -> %s", req.method, req.url, response.status_code)
+        log.info("HTTP ответ ← %s %s → %s", req.method, req.url, response.status_code, extra={"user_id": "system"})
         if response.status_code >= 400:
             text = ""
             try:
                 text = response.text[:500]
             except Exception:
                 pass
-            log.error("[api] body: %s", text)
+            log.error("HTTP ответ с ошибкой: код=%s, тело(<=500симв)=%s", response.status_code, text, extra={"user_id": "system"})
     except Exception:
         pass
 
@@ -47,5 +49,5 @@ class BaseApi:
         try:
             await self.client.aclose()
         except Exception as e:
-            log.error("[BaseApi.close] – Ошибка при закрытии клиента: %s", e)
+            log.error("HTTP-клиент: ошибка закрытия — ошибка=%s", e, extra={"user_id": "system"})
             raise

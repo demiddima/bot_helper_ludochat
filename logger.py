@@ -1,4 +1,5 @@
-# Commit: Расширен IgnoreBadStatusLineFilter для подавления бинарных мусорных запросов
+# logger.py
+# Commit: убрать автозапуск configure_logging() — конфиг вызывается из main.py
 
 import logging
 import sys
@@ -8,9 +9,8 @@ import httpx
 import aiohttp.http_exceptions
 from aiohttp.http_exceptions import HttpProcessingError, BadHttpMessage, BadStatusLine as AioBadStatusLine
 import config
-        
+
 class IgnoreBadStatusLineFilter(logging.Filter):
-    """Игнорирует шумные HTTP-исключения и сопутствующие сообщения."""
     def filter(self, record: logging.LogRecord) -> bool:
         if record.exc_info:
             exc_type = record.exc_info[0]
@@ -23,10 +23,9 @@ class IgnoreBadStatusLineFilter(logging.Filter):
             )):
                 return False
         msg = record.getMessage()
-        if any(sub in msg for sub in 
-            ("Invalid method encountered", 
-            "TLSV1_ALERT", 
+        if any(sub in msg for sub in (
             "Invalid method encountered",
+            "TLSV1_ALERT",
             "BadStatusLine",
             "b'\\x16\\x03\\x01'",
             "b'\\x05\\x01'",
@@ -35,10 +34,10 @@ class IgnoreBadStatusLineFilter(logging.Filter):
             "b'\\x16\\x03\\x01\\x01\\x17\\x01",
             "b'OPTIONS sip",
             "aiohttp.http_exceptions.BadHttpMessage",
-            "TLSV1_ALERT",
             "Pause on PRI/Upgrade",
             "Update id=",
-            "b'MGLNDD")):
+            "b'MGLNDD"
+        )):
             return False
         return True
 
@@ -46,6 +45,7 @@ class IgnoreBadStatusLineFilter(logging.Filter):
 class IgnoreUpdateFilter(logging.Filter):
     def filter(self, record):
         return "Update id=" not in record.getMessage()
+
 
 class IgnoreStaticPathsFilter(logging.Filter):
     def __init__(self, ignore_paths):
@@ -55,11 +55,13 @@ class IgnoreStaticPathsFilter(logging.Filter):
         msg = record.getMessage()
         return not any(path in msg for path in self.ignore_paths)
 
+
 class CustomFormatter(logging.Formatter):
     def format(self, record):
         if not hasattr(record, "user_id"):
             record.user_id = "system"
         return super().format(record)
+
 
 class TelegramHandler(logging.Handler):
     def __init__(self):
@@ -95,6 +97,7 @@ class TelegramHandler(logging.Handler):
             except Exception as e:
                 print(f"[Logger] Failed to send log to Telegram: {e}", file=sys.stderr)
 
+
 def configure_logging():
     root = logging.getLogger()
     for h in list(root.handlers):
@@ -127,4 +130,4 @@ def configure_logging():
         "/favicon.ico", "/robots.txt", "/sitemap.xml", "/config.json", "/.env", "/.git/"
     ]))
 
-configure_logging()
+# ⬅️ Никакого configure_logging() тут не вызываем. Вызывается в main.py.

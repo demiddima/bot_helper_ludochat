@@ -15,7 +15,7 @@ class ChatsMixin(BaseApi):
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            log.error("[get_chats] – user_id=system – Ошибка: %s", e, extra={"user_id": "system"})
+            log.error("Чаты: ошибка получения списка — ошибка=%s", e, extra={"user_id": "system"})
             raise
 
     async def upsert_chat(self, chat_data: Dict) -> Dict:
@@ -25,7 +25,7 @@ class ChatsMixin(BaseApi):
             return r.json()
         except Exception as e:
             chat_id = chat_data.get("id", "system")
-            log.error("[upsert_chat] – user_id=%s – Ошибка: %s", chat_id, e, extra={"user_id": chat_id})
+            log.error("Чаты: ошибка сохранения — chat_id=%s, ошибка=%s", chat_id, e, extra={"user_id": chat_id})
             raise
 
     async def delete_chat(self, chat_id: int) -> None:
@@ -33,5 +33,5 @@ class ChatsMixin(BaseApi):
             r = await self.client.delete(f"/chats/{chat_id}")
             r.raise_for_status()
         except Exception as e:
-            log.error("[delete_chat] – user_id=%s – Ошибка: %s", chat_id, e, extra={"user_id": chat_id})
+            log.error("Чаты: ошибка удаления — chat_id=%s, ошибка=%s", chat_id, e, extra={"user_id": chat_id})
             raise

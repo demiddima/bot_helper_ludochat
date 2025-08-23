@@ -14,7 +14,7 @@ class AlgoMixin(BaseApi):
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            log.error("[get_progress] – user_id=%s – Ошибка: %s", user_id, e, extra={"user_id": user_id})
+            log.error("Алгоритм: ошибка получения прогресса — user_id=%s, ошибка=%s", user_id, e, extra={"user_id": user_id})
             raise
 
     async def clear_progress(self, user_id: int) -> None:
@@ -22,7 +22,7 @@ class AlgoMixin(BaseApi):
             r = await self.client.delete(f"/algo/{user_id}")
             r.raise_for_status()
         except Exception as e:
-            log.error("[clear_progress] – user_id=%s – Ошибка: %s", user_id, e, extra={"user_id": user_id})
+            log.error("Алгоритм: ошибка очистки прогресса — user_id=%s, ошибка=%s", user_id, e, extra={"user_id": user_id})
             raise
 
     async def set_progress(self, user_id: int, step: int) -> None:
@@ -30,7 +30,7 @@ class AlgoMixin(BaseApi):
             r = await self.client.put(f"/algo/{user_id}/step", params={"step": step})
             r.raise_for_status()
         except Exception as e:
-            log.error("[set_progress] – user_id=%s – Ошибка: %s", user_id, e, extra={"user_id": user_id})
+            log.error("Алгоритм: ошибка установки шага — user_id=%s, step=%s, ошибка=%s", user_id, step, e, extra={"user_id": user_id})
             raise
 
     async def set_basic(self, user_id: int, completed: bool) -> None:
@@ -38,7 +38,7 @@ class AlgoMixin(BaseApi):
             r = await self.client.put(f"/algo/{user_id}/basic", params={"completed": completed})
             r.raise_for_status()
         except Exception as e:
-            log.error("[set_basic] – user_id=%s – Ошибка: %s", user_id, e, extra={"user_id": user_id})
+            log.error("Алгоритм: ошибка отметки basic — user_id=%s, completed=%s, ошибка=%s", user_id, completed, e, extra={"user_id": user_id})
             raise
 
     async def set_advanced(self, user_id: int, completed: bool) -> None:
@@ -46,5 +46,5 @@ class AlgoMixin(BaseApi):
             r = await self.client.put(f"/algo/{user_id}/advanced", params={"completed": completed})
             r.raise_for_status()
         except Exception as e:
-            log.error("[set_advanced] – user_id=%s – Ошибка: %s", user_id, e, extra={"user_id": user_id})
+            log.error("Алгоритм: ошибка отметки advanced — user_id=%s, completed=%s, ошибка=%s", user_id, completed, e, extra={"user_id": user_id})
             raise

@@ -14,5 +14,8 @@ class LinksMixin(BaseApi):
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            log.error("[track_link_visit] – user_id=system – Ошибка: %s", e, extra={"user_id": "system"})
+            log.error(
+                "Ссылки: ошибка учёта перехода — link_key=%s, ошибка=%s",
+                link_key, e, extra={"user_id": "system"}
+            )
             raise

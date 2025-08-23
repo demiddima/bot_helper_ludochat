@@ -18,7 +18,10 @@ class UsersMixin(BaseApi):
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            log.error("[upsert_user] – user_id=%s – Ошибка: %s", user_id, e)
+            log.error(
+                "Пользователь: ошибка сохранения — user_id=%s, username=%s, ошибка=%s",
+                user_id, username, e, extra={"user_id": user_id}
+            )
             raise
 
     async def get_user(self, user_id: int) -> Dict:
@@ -27,7 +30,10 @@ class UsersMixin(BaseApi):
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            log.error("[get_user] – user_id=%s – Ошибка: %s", user_id, e, extra={"user_id": user_id})
+            log.error(
+                "Пользователь: ошибка получения — user_id=%s, ошибка=%s",
+                user_id, e, extra={"user_id": user_id}
+            )
             raise
 
     async def update_user(self, user_id: int, user_data: Dict) -> Dict:
@@ -36,7 +42,10 @@ class UsersMixin(BaseApi):
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            log.error("[update_user] – user_id=%s – Ошибка: %s", user_id, e, extra={"user_id": user_id})
+            log.error(
+                "Пользователь: ошибка обновления — user_id=%s, ошибка=%s",
+                user_id, e, extra={"user_id": user_id}
+            )
             raise
 
     async def delete_user(self, user_id: int) -> None:
@@ -44,5 +53,8 @@ class UsersMixin(BaseApi):
             r = await self.client.delete(f"/users/{user_id}")
             r.raise_for_status()
         except Exception as e:
-            log.error("[delete_user] – user_id=%s – Ошибка: %s", user_id, e, extra={"user_id": user_id})
+            log.error(
+                "Пользователь: ошибка удаления — user_id=%s, ошибка=%s",
+                user_id, e, extra={"user_id": user_id}
+            )
             raise

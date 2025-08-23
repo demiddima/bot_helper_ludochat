@@ -1,5 +1,5 @@
 # admin_texts.py
-# Обновлено: Корпоративный стиль логирования — [function] – user_id=… – текст. Все рисковые действия — в try/except.
+# Обновлено: в роутерах пишем только ошибки; позитивные логи убраны.
 
 import logging
 from aiogram import Router, F
@@ -21,6 +21,7 @@ _setwork_pending: set[int] = set()
 _setprojects_pending: set[int] = set()
 _setdoctors_pending: set[int] = set()
 
+
 def _text_command_handler(command_name: str, pending_set: set[int], file_path):
     """
     Генерирует два хэндлера:
@@ -28,7 +29,6 @@ def _text_command_handler(command_name: str, pending_set: set[int], file_path):
       2) приём текста и сохранение в файл
     """
     cmd = f"set{command_name}"
-    func_name = f"_text_command_handler_{command_name}"
 
     @router.message(
         Command(cmd),
@@ -40,14 +40,10 @@ def _text_command_handler(command_name: str, pending_set: set[int], file_path):
         try:
             await message.answer(f"📄 Пришлите новый HTML-текст для «{command_name}.html»")
             pending_set.add(user_id)
-            logging.info(
-                f"user_id={user_id} – Ожидание нового текста для {command_name}.html",
-                extra={"user_id": user_id}
-            )
         except Exception as e:
             logging.error(
-                f"user_id={user_id} – Ошибка при старте команды: {e}",
-                extra={"user_id": user_id}
+                "Тексты: ошибка старта ожидания — user_id=%s, секция=%s, ошибка=%s",
+                user_id, command_name, e, extra={"user_id": user_id}
             )
 
     @router.message(
@@ -62,24 +58,21 @@ def _text_command_handler(command_name: str, pending_set: set[int], file_path):
             with open(path, "w", encoding="utf-8") as f:
                 f.write(new_text)
             await message.answer(f"✅ Файл «{command_name}.html» успешно обновлён и будет использоваться сразу.")
-            logging.info(
-                f"user_id={user_id} – Обновлён файл {command_name}.html",
-                extra={"user_id": user_id}
-            )
         except Exception as e:
             logging.error(
-                f"user_id={user_id} – Не удалось сохранить «{command_name}.html»: {e}",
-                extra={"user_id": user_id}
+                "Тексты: ошибка сохранения — user_id=%s, файл=%s, ошибка=%s",
+                user_id, f"{command_name}.html", e, extra={"user_id": user_id}
             )
             try:
                 await message.answer(f"❌ Ошибка при сохранении «{command_name}.html». Подробности в логах.")
             except Exception as ee:
                 logging.error(
-                    f"user_id={user_id} – Не удалось отправить сообщение об ошибке: {ee}",
-                    extra={"user_id": user_id}
+                    "Тексты: ошибка оповещения об ошибке — user_id=%s, файл=%s, ошибка=%s",
+                    user_id, f"{command_name}.html", ee, extra={"user_id": user_id}
                 )
         finally:
             pending_set.discard(user_id)
+
 
 # Регистрируем команды на основе секций
 _text_command_handler("welcome",         _setwelcome_pending,         messages.WELCOME_FILE)

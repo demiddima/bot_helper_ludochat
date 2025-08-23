@@ -9,7 +9,7 @@ import sys
 import asyncio
 import logging
 import html                    # для html.escape
-from utils import get_bot
+from utils import get_bot, shutdown_utils
 from typing import Any
 import traceback
 
@@ -30,6 +30,7 @@ from services.broadcasts import run_broadcast_worker
 from handlers import router as handlers_router   # единый агрегатор
 from config import ERROR_LOG_CHANNEL_ID, ID_ADMIN_USER
 from utils.time_msk import now_msk_naive  # ← МСК-naive время
+from services.db_api_client import db_api_client  # добавлено: для аккуратного закрытия
 
 # Флаг для проверки повторных логов
 already_logged = set()
@@ -49,6 +50,7 @@ def _async_exception_handler(loop, context):
     logging.getLogger(__name__).error("Необработанная ошибка asyncio", exc_info=context.get("exception"))
 asyncio.get_event_loop().set_exception_handler(_async_exception_handler)
 
+
 def _chunk_text(text: str, limit: int = 4096):
     """Режет текст на части длиной ≤ limit, стараясь резать по границам строк."""
     if not text:
@@ -63,6 +65,7 @@ def _chunk_text(text: str, limit: int = 4096):
             cut = end
         yield text[start:cut]
         start = cut
+
 
 # Универсальный обработчик ошибок
 async def global_error_handler(*args: Any) -> bool:
@@ -190,8 +193,10 @@ async def main():
     log.info(f"HTTP health-check сервер запущен на порту {port}")
 
     app = web.Application()
+
     async def health(request):
         return web.Response(text="OK")
+
     app.router.add_get("/", health)
 
     runner = web.AppRunner(app)
@@ -199,8 +204,23 @@ async def main():
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
 
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        await dp.start_polling(bot)
+    finally:
+        # аккуратный shutdown: закрываем DB API и обе сессии бота (локальную и глобальную)
+        try:
+            await db_api_client.close()
+        except Exception:
+            pass
+        try:
+            await shutdown_utils()
+        except Exception:
+            pass
+        try:
+            await bot.session.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

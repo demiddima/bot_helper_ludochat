@@ -1,8 +1,13 @@
 # utils/__init__.py
-# Пакет utils: реэкспорт утилит, чтобы старые импорты вида `from utils import get_bot`
-# продолжили работать после переноса utils.py -> utils/common.py
+# Реэкспорт утилит для совместимости старых импортов (from utils import ...)
 
-from .common import *  # noqa: F401,F403  (get_bot, cleanup_join_requests, log_and_report, и т.п.)
+from .common import (  # noqa: F401
+    get_bot,
+    cleanup_join_requests,
+    log_and_report,
+    shutdown_utils,
+    join_requests,            # ← добавили
+)
 from .time_msk import (  # noqa: F401
     MSK,
     now_msk_naive,
@@ -11,11 +16,11 @@ from .time_msk import (  # noqa: F401
 )
 
 __all__ = [
-    # из common
     "get_bot",
     "cleanup_join_requests",
     "log_and_report",
-    # из time_msk
+    "shutdown_utils",
+    "join_requests",          # ← добавили
     "MSK",
     "now_msk_naive",
     "to_msk_naive",
