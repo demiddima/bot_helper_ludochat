@@ -1,5 +1,5 @@
 # services/broadcasts/service.py
-# Оркестрация рассылок: сбор контента, аудитория, троттлинг, статусы, try-send-now.
+# Оркестрация рассылок: контент → аудитория → троттлинг → репорт статусов.
 
 from __future__ import annotations
 
@@ -11,14 +11,21 @@ import config
 from aiogram import Bot
 
 from services.db_api import db_api_client
+from services.audience import resolve_audience  # резолв аудитории (ids|kind|sql)
 from utils.common import log_and_report
-from services.audience import resolve_audience  # единый аудит-сервис
-from .sender import send_media
+from utils.time_msk import now_msk_naive
+
+from .sender import send_content_json
 
 log = logging.getLogger(__name__)
 
 # сколько результатов копим в буфере перед /deliveries/report
 REPORT_BATCH = 200
+
+
+def _now_msk_iso() -> str:
+    """Текущее время (МСК, naive) в формате 'YYYY-MM-DD HH:MM:SS'."""
+    return now_msk_naive().strftime("%Y-%m-%d %H:%M:%S")
 
 
 async def _try_materialize(broadcast_id: int, user_ids: List[int]) -> None:
@@ -46,7 +53,7 @@ async def _try_materialize(broadcast_id: int, user_ids: List[int]) -> None:
 
 async def _try_report(broadcast_id: int, items: List[Dict[str, Any]]) -> None:
     """
-    Батч-репорт результатов доставки (sent/failed/…).
+    Батч-репорт результатов доставки (sent/failed/skipped).
     Если метод клиента пока не реализован — пропускаем.
     """
     if not items:
@@ -64,75 +71,68 @@ async def _try_report(broadcast_id: int, items: List[Dict[str, Any]]) -> None:
 
 
 async def send_broadcast(bot: Bot, broadcast: dict, throttle_per_sec: Optional[int] = None) -> Tuple[int, int]:
-    """Основная отправка рассылки по её описанию из БД."""
+    """
+    Основная отправка: читает broadcast['content'] (JSON {"text","files"}),
+    берёт target, резолвит аудиторию и шлёт однотипно каждому.
+    Возвращает (sent, failed).
+    """
     bid = broadcast["id"]
     rate = throttle_per_sec or getattr(config, "BROADCAST_RATE_PER_SEC", 29)
     rate = max(1, int(rate))
     window = 1.0 / rate
 
-    # 1. Загружаем контент
-    try:
-        media = await db_api_client.get_broadcast_media(bid)
-        log.info("Загружен контент рассылки id=%s (%s элементов)", bid, len(media))
-    except Exception as e:
-        log.error("Не удалось загрузить медиа для рассылки id=%s: %s", bid, e)
-        media = []
-
-    try:
-        target = await db_api_client.get_broadcast_target(bid)
-        log.info("Загружена аудитория рассылки id=%s", bid)
-    except Exception as e:
-        log.error("Не удалось получить аудиторию рассылки id=%s: %s", bid, e)
-        target = None
-
-    # 2. Чистим пустые HTML-элементы
-    if media:
-        cleaned: List[Dict[str, Any]] = []
-        for it in media:
-            if it.get("type") == "html":
-                txt = ((it.get("payload") or {}).get("text") or "").strip()
-                if not txt:
-                    log.warning("Удалён пустой html-элемент из рассылки id=%s", bid)
-                    continue
-            cleaned.append(it)
-        media = cleaned
-
-    # 3. Fallback — контент из broadcast["content_html"]
-    if not media:
-        html = (broadcast.get("content_html") or "").strip()
-        if html:
-            media = [{"type": "html", "payload": {"text": html}}]
-
-    if not media:
-        log.error("Рассылка id=%s не отправлена: нет контента", bid)
+    # 1. Контент
+    content = broadcast.get("content") or {}
+    if not isinstance(content, dict):
+        log.error("Рассылка id=%s не отправлена: content не JSON", bid)
         return 0, 0
 
-    # 4. Формируем аудиторию
+    # 2. Аудитория
+    try:
+        target = await db_api_client.get_broadcast_target(bid)
+    except Exception as e:
+        log.error("Не удалось получить аудиторию рассылки id=%s: %s", bid, e)
+        return 0, 0
+
     audience = await resolve_audience(target)
     if not audience:
         log.warning("Рассылка id=%s не отправлена: аудитория пустая", bid)
         return 0, 0
 
-    # 4.1 Материализуем pending (идемпотентно; если метод ещё не добавлен — шаг тихо пропустится)
+    # 3. Материализуем pending (идемпотентно; если метод ещё не добавлен — тихо пропустится)
     await _try_materialize(bid, audience)
 
     log.info("Начинаю рассылку id=%s: аудитория=%s, скорость=%s msg/с", bid, len(audience), rate)
 
-    # 5. Цикл отправки + батч-репорт
+    # 4. Цикл отправки + батч-репорт
     sent = 0
     failed = 0
     report_buf: List[Dict[str, Any]] = []
 
     for uid in audience:
-        ok = await send_media(bot, uid, media)
+        ok, msg_id, err_code, err_msg = await send_content_json(bot, uid, content)
         if ok:
             sent += 1
-            report_buf.append({"user_id": uid, "status": "sent"})
-            log.debug("Сообщение отправлено пользователю %s (id рассылки=%s)", uid, bid)
+            report_buf.append({
+                "user_id": uid,
+                "status": "sent",
+                "message_id": msg_id,
+                "sent_at": _now_msk_iso(),
+                "attempt_inc": 1,
+            })
+            log.debug("Сообщение отправлено пользователю %s (broadcast=%s)", uid, bid)
         else:
             failed += 1
-            report_buf.append({"user_id": uid, "status": "failed"})
-            log.debug("Ошибка при отправке пользователю %s (id рассылки=%s)", uid, bid)
+            report_buf.append({
+                "user_id": uid,
+                "status": "failed",
+                "message_id": msg_id,  # может быть None
+                "error_code": err_code,
+                "error_message": (err_msg[:1000] if err_msg else None),
+                "sent_at": _now_msk_iso(),
+                "attempt_inc": 1,
+            })
+            log.debug("Ошибка при отправке пользователю %s (broadcast=%s): %s", uid, bid, err_code or "Unknown")
 
         if len(report_buf) >= REPORT_BATCH:
             await _try_report(bid, report_buf)
@@ -140,11 +140,11 @@ async def send_broadcast(bot: Bot, broadcast: dict, throttle_per_sec: Optional[i
 
         await asyncio.sleep(window)
 
-    # добросим хвост буфера
+    # добросим хвост
     if report_buf:
         await _try_report(bid, report_buf)
 
-    # 6. Итог
+    # 5. Итог
     if sent == 0 and failed > 0:
         log.error("Рассылка id=%s не доставлена никому (ошибок=%s)", bid, failed)
         try:
@@ -160,17 +160,16 @@ async def send_broadcast(bot: Bot, broadcast: dict, throttle_per_sec: Optional[i
 
 
 async def mark_broadcast_sent(broadcast_id: int) -> dict:
-    """Помечаем рассылку как 'sent' в БД."""
     log.info("Помечаем рассылку id=%s как доставленную", broadcast_id)
     return await db_api_client.update_broadcast(broadcast_id, status="sent")
 
 
 # --- Немедленная попытка отправки конкретной рассылки ---
-from .worker import _parse_dt_msk, _now_msk  # функции времени в МСК
+from .worker import _parse_dt_msk, _now_msk  # совместимость
 
 
 async def try_send_now(bot: Bot, broadcast_id: int) -> None:
-    """Принудительная проверка и запуск рассылки."""
+    """Принудительный запуск: если scheduled <= now — отправим сразу."""
     try:
         b = await db_api_client.get_broadcast(broadcast_id)
         log.info("Получена рассылка id=%s для немедленной проверки", broadcast_id)

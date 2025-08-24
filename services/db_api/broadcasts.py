@@ -14,12 +14,12 @@ class BroadcastsMixin(BaseApi):
         *,
         kind: str,
         title: str,
-        content_html: str,
+        content: Dict[str, Any],  # {"text": "<HTML>", "files": "id1,id2"}
         status: Optional[str] = None,
-        scheduled_at: Optional[str] = None,
+        scheduled_at: Optional[str] = None,  # "YYYY-MM-DD HH:MM:SS" (МСК-naive)
         created_by: Optional[int] = None,
     ) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"kind": kind, "title": title, "content_html": content_html}
+        payload: Dict[str, Any] = {"kind": kind, "title": title, "content": content}
         if status is not None:
             payload["status"] = status
         if scheduled_at is not None:
@@ -73,17 +73,7 @@ class BroadcastsMixin(BaseApi):
             log.error("Рассылки: ошибка удаления — id=%s, ошибка=%s", broadcast_id, e, extra={"user_id": None})
             raise
 
-    # -------- memberships helper --------
-    async def list_memberships_by_chat(self, chat_id: int) -> List[Dict[str, Any]]:
-        try:
-            r = await self.client.get("/memberships/", params={"chat_id": chat_id})
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            log.error("Подписки: ошибка списка по чату — chat_id=%s, ошибка=%s", chat_id, e, extra={"user_id": None})
-            raise
-
-    # -------- target/media/sending --------
+    # -------- target --------
     async def get_broadcast_target(self, broadcast_id: int) -> Dict[str, Any]:
         try:
             r = await self.client.get(f"/broadcasts/{broadcast_id}/target")
@@ -94,6 +84,12 @@ class BroadcastsMixin(BaseApi):
             raise
 
     async def put_broadcast_target(self, broadcast_id: int, target_payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        target_payload:
+          {"type":"ids","user_ids":[...]}
+          {"type":"sql","sql":"SELECT ..."}
+          {"type":"kind","kind":"news|meetings|important"}
+        """
         try:
             r = await self.client.put(f"/broadcasts/{broadcast_id}/target", json=target_payload)
             r.raise_for_status()
@@ -102,28 +98,11 @@ class BroadcastsMixin(BaseApi):
             log.error("Рассылки: ошибка сохранения таргета — id=%s, ошибка=%s", broadcast_id, e, extra={"user_id": None})
             raise
 
-    async def get_broadcast_media(self, broadcast_id: int) -> List[Dict[str, Any]]:
-        try:
-            r = await self.client.get(f"/broadcasts/{broadcast_id}/media")
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            log.error("Рассылки: ошибка получения медиа — id=%s, ошибка=%s", broadcast_id, e, extra={"user_id": None})
-            raise
-
-    async def put_broadcast_media(self, broadcast_id: int, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        try:
-            r = await self.client.put(f"/broadcasts/{broadcast_id}/media", json={"items": items})
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            log.error(
-                "Рассылки: ошибка сохранения медиа — id=%s, элементов=%s, ошибка=%s",
-                broadcast_id, (len(items) if isinstance(items, list) else "n/a"), e, extra={"user_id": None}
-            )
-            raise
-
+    # -------- audience --------
     async def audience_preview(self, target_payload: Dict[str, Any], limit: int = 10000) -> Dict[str, Any]:
+        """
+        POST /audiences/preview {target, limit} -> {"total": int, "sample": [ids]}
+        """
         try:
             r = await self.client.post("/audiences/preview", json={"target": target_payload, "limit": limit})
             r.raise_for_status()
@@ -135,6 +114,20 @@ class BroadcastsMixin(BaseApi):
             )
             raise
 
+    async def audiences_resolve(self, target_payload: Dict[str, Any], limit: Optional[int] = None) -> Dict[str, Any]:
+        """
+        POST /audiences/resolve
+        body: {"target": <target_payload>, "limit": <int>}  # если limit не None
+        -> {"total": int, "ids": [int,...]}
+        """
+        payload: Dict[str, Any] = {"target": target_payload}
+        if limit is not None:
+            payload["limit"] = int(limit)
+        r = await self.client.post("/audiences/resolve", json=payload)
+        r.raise_for_status()
+        return r.json()
+
+    # -------- sending --------
     async def send_broadcast_now(self, broadcast_id: int) -> Dict[str, Any]:
         try:
             r = await self.client.post(f"/broadcasts/{broadcast_id}/send_now")
@@ -144,6 +137,7 @@ class BroadcastsMixin(BaseApi):
             log.error("Рассылки: ошибка немедленной отправки — id=%s, ошибка=%s", broadcast_id, e, extra={"user_id": None})
             raise
 
+    # -------- deliveries --------
     async def list_deliveries(self, broadcast_id: int, status: Optional[str] = None, limit: int = 200, offset: int = 0) -> List[Dict[str, Any]]:
         try:
             params = {"limit": limit, "offset": offset}
@@ -158,19 +152,6 @@ class BroadcastsMixin(BaseApi):
                 broadcast_id, status, limit, offset, e, extra={"user_id": None}
             )
             raise
-        
-    async def audiences_resolve(self, target_payload: Dict[str, Any], limit: Optional[int] = None) -> Dict[str, Any]:
-        """
-        POST /audiences/resolve
-        body: {"target": <target_payload>, "limit": <int>}  # если limit не None
-        -> {"total": int, "ids": [int,...]}
-        """
-        payload: Dict[str, Any] = {"target": target_payload}
-        if limit is not None:
-            payload["limit"] = int(limit)
-        r = await self.client.post("/audiences/resolve", json=payload)
-        r.raise_for_status()
-        return r.json()
 
     async def deliveries_materialize(self, broadcast_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -194,7 +175,7 @@ class BroadcastsMixin(BaseApi):
         """
         POST /broadcasts/{id}/deliveries/report
         payload = {"items":[{"user_id":..., "status":"sent|failed|skipped|pending",
-                             "message_id":?, "error_code":?, "error_message":?, "sent_at":?}, ...]}
+                             "message_id":?, "error_code":?, "error_message":?, "sent_at":?, "attempt_inc":1}, ...]}
         -> {"processed": int, "updated": int, "inserted": int}
         """
         try:
