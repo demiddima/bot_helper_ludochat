@@ -1,53 +1,65 @@
-# main.py
-# Подключение админ-команд для рассылок и фонового воркера run_broadcast_worker.
+# main.py — чистая версия под новую архитектуру (Hallway/Mailing), без handlers.*
 
-import logger
-logger.configure_logging()
+from __future__ import annotations
 
 import os
 import sys
 import asyncio
 import logging
-import html                    # для html.escape
-from utils import get_bot, shutdown_utils
-from typing import Any
 import traceback
+from typing import Any
 
-from datetime import datetime
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 
-# Безопасный импорт для разных версий aiogram
+import logger
+logger.configure_logging()
+
+import config
+from config import ERROR_LOG_CHANNEL_ID, ID_ADMIN_USER
+
+# Новые агрегаторы роутеров
+from Hallway.routers import router as hallway_router
+from Mailing.routers import router as mailing_router
+
+# Утилиты/время/DB API — общий слой
+from common.utils import get_bot, shutdown_utils
+from common.utils.time_msk import now_msk_naive
+from common.db_api_client import db_api_client
+
+# Хранилище
+from storage import upsert_chat, get_chats as storage_get_chats
+
+# Фоновый воркер рассылок
+from Mailing.services.broadcasts import run_broadcast_worker
+
+# Совместимость aiogram 3.7+
 try:
     from aiogram.client.default import DefaultBotProperties  # aiogram 3.7+
 except Exception:
     DefaultBotProperties = None
 
-import config
-from storage import upsert_chat, get_chats as storage_get_chats
-from services.broadcasts import run_broadcast_worker
-from handlers import router as handlers_router   # единый агрегатор
-from config import ERROR_LOG_CHANNEL_ID, ID_ADMIN_USER
-from utils.time_msk import now_msk_naive  # ← МСК-naive время
-from services.db_api_client import db_api_client  # добавлено: для аккуратного закрытия
-
-# Флаг для проверки повторных логов
-already_logged = set()
-
-# Глобальная переменная для отслеживания чатов
-tracked_chats: set = set()
+log = logging.getLogger(__name__)
+already_logged: set[str] = set()
+tracked_chats: set[int] = set()
 
 
-# 1) ловим uncaught исключения в sync-коде
+# --- глобальные ловушки исключений ---
+
 def _excepthook(exc_type, exc_value, tb):
-    logging.getLogger(__name__).exception("Необработанное исключение", exc_info=(exc_type, exc_value, tb))
+    logging.getLogger(__name__).exception(
+        "Необработанное исключение", exc_info=(exc_type, exc_value, tb)
+    )
+
 sys.excepthook = _excepthook
 
 
-# 2) ловим исключения в asyncio-тасках
 def _async_exception_handler(loop, context):
-    logging.getLogger(__name__).error("Необработанная ошибка asyncio", exc_info=context.get("exception"))
+    logging.getLogger(__name__).error(
+        "Необработанная ошибка asyncio", exc_info=context.get("exception")
+    )
+
 asyncio.get_event_loop().set_exception_handler(_async_exception_handler)
 
 
@@ -59,7 +71,6 @@ def _chunk_text(text: str, limit: int = 4096):
     n = len(text)
     while start < n:
         end = min(start + limit, n)
-        # попробуем отмотать до ближайшего перевода строки
         cut = text.rfind("\n", start, end)
         if cut == -1 or cut <= start + limit // 2:
             cut = end
@@ -67,14 +78,13 @@ def _chunk_text(text: str, limit: int = 4096):
         start = cut
 
 
-# Универсальный обработчик ошибок
 async def global_error_handler(*args: Any) -> bool:
     """
     Универсальный обработчик ошибок:
     - Поддерживает сигнатуры (exception) и (update, exception).
     - Экранирует HTML и режет текст на куски ≤4096 символов.
     - Шлёт в ERROR_LOG_CHANNEL_ID (если задан), иначе первому ID из ID_ADMIN_USER.
-    Возвращает True, чтобы не прерывать пайплайн aiogram.
+    Возвращает True.
     """
     if len(args) == 2:
         update, exception = args
@@ -84,7 +94,6 @@ async def global_error_handler(*args: Any) -> bool:
     else:
         return True
 
-    log = logging.getLogger(__name__)
     log.exception("Необработанное исключение: %s", exception, exc_info=True)
 
     # целевой чат для алертов
@@ -99,7 +108,7 @@ async def global_error_handler(*args: Any) -> bool:
         except Exception:
             target_chat_id = None
     if not target_chat_id:
-        return True  # Некуда слать — выходим.
+        return True  # некому слать — выходим
 
     bot = get_bot()
 
@@ -132,25 +141,23 @@ async def global_error_handler(*args: Any) -> bool:
     return True
 
 
-async def _warmup_tracked_chats(log: logging.Logger):
+async def _warmup_tracked_chats(_log: logging.Logger):
     """Неблокирующий прогрев списка чатов: если БД недоступна — просто пишем лог и не падаем."""
     global tracked_chats
     try:
         data = await storage_get_chats()
         tracked_chats = set(data)
-        log.info(f"tracked_chats (warmup): {tracked_chats}")
-    except Exception as e:
-        log.error("Не удалось получить список чатов (warmup), продолжим без него", exc_info=True)
+        _log.info(f"tracked_chats (warmup): {tracked_chats}")
+    except Exception:
+        _log.error("Не удалось получить список чатов (warmup), продолжим без него", exc_info=True)
 
 
 async def main():
-    log = logging.getLogger(__name__)
-
     if "Запускаем бота" not in already_logged:
         log.info("Запускаем бота")
         already_logged.add("Запускаем бота")
 
-    # Инициализация бота (совместимость 3.6/3.7+)
+    # Инициализация бота
     if DefaultBotProperties is not None:
         bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
         log.info("Инициализация Bot: aiogram>=3.7 (DefaultBotProperties)")
@@ -159,15 +166,15 @@ async def main():
         log.info("Инициализация Bot: aiogram<=3.6 (parse_mode в конструкторе)")
 
     dp = Dispatcher()
+    # Подключаем новые реестры
+    dp.include_router(hallway_router)
+    dp.include_router(mailing_router)
     dp.errors.register(global_error_handler)
 
-    # Подключаем все роутеры из handlers
-    dp.include_router(handlers_router)
-
-    # Стартуем фоновые задачи (не блокируем запуск)
+    # Фоновые задачи
     asyncio.create_task(_warmup_tracked_chats(log))
 
-    # ⬇️ Фоновый воркер рассылок: интервал из .env/config, дефолт 900 сек (15 мин)
+    # Интервал воркера рассылок
     _raw_interval = os.getenv("BROADCAST_WORKER_INTERVAL") or getattr(config, "BROADCAST_WORKER_INTERVAL", 900)
     try:
         interval = int(_raw_interval)
@@ -175,30 +182,28 @@ async def main():
         interval = 900
     asyncio.create_task(run_broadcast_worker(bot, interval_seconds=interval))
 
+    # Регистрируем чат бота
     me = await bot.get_me()
     config.BOT_ID = me.id
     await upsert_chat({
         "id": me.id,
         "title": me.username or "",
         "type": "private",
-        # МСК-naive метка, без UTC:
-        "added_at": now_msk_naive().isoformat()
+        "added_at": now_msk_naive().isoformat(),  # МСК-naive
     })
-
     if f"Registered bot chat: {me.id}" not in already_logged:
         log.info(f"Зарегистрирован чат бота: {me.id}")
         already_logged.add(f"Registered bot chat: {me.id}")
 
+    # Health-check HTTP
     port = int(os.getenv("PORT", "8080"))
     log.info(f"HTTP health-check сервер запущен на порту {port}")
-
     app = web.Application()
 
     async def health(request):
         return web.Response(text="OK")
 
     app.router.add_get("/", health)
-
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
@@ -208,7 +213,7 @@ async def main():
         await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot)
     finally:
-        # аккуратный shutdown: закрываем DB API и обе сессии бота (локальную и глобальную)
+        # Аккуратный shutdown
         try:
             await db_api_client.close()
         except Exception:

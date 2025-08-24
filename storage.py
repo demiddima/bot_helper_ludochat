@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from services.db_api_client import db_api_client
+from common.db_api_client import db_api_client
 from httpx import HTTPStatusError
 from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
 
