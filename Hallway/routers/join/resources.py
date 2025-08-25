@@ -163,7 +163,6 @@ async def send_resources_message(bot, user, uid, refresh=False, previous_message
         text = intro + ("\n\n".join(parts) if parts else "Ссылки временно недоступны. Нажмите «Меню» и попробуйте «Обновить ссылки».")
 
         # 5) Клавиатура:
-        #    строка 1: три URL-кнопки в фиксированном порядке
         row1 = []
         if url_ludo:
             row1.append(InlineKeyboardButton(text="Лудочат", url=url_ludo))
@@ -172,7 +171,6 @@ async def send_resources_message(bot, user, uid, refresh=False, previous_message
         if url_vyru:
             row1.append(InlineKeyboardButton(text="Выручат", url=url_vyru))
 
-        #    строка 2: две callback-кнопки
         row2 = [
             InlineKeyboardButton(text="Наше сообщество", callback_data="section_projects"),
             InlineKeyboardButton(text="Ваша анонимность", callback_data="section_anonymity"),
@@ -184,7 +182,7 @@ async def send_resources_message(bot, user, uid, refresh=False, previous_message
         keyboard_rows.append(row2)
         keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
 
-        # 6) Отправляем (кнопка «🧭 Меню» добавится автоматически в send_chunked_message)
+        # 6) Отправляем пользователю
         await send_chunked_message(
             uid,
             text,
@@ -193,14 +191,14 @@ async def send_resources_message(bot, user, uid, refresh=False, previous_message
             reply_markup=keyboard,
         )
 
-        # 7) Лог-канал
+        # 7) Лог-канал (✅ фикс: используем f-строку для uid)
         try:
             log_chunks = []
             if url_ludo: log_chunks.append(f"Лудочат: {url_ludo}")
             if url_prak: log_chunks.append(f"Практичат: {url_prak}")
             if url_vyru: log_chunks.append(f"Выручат: {url_vyru}")
             if LOG_CHANNEL_ID and log_chunks:
-                log_message = "🔗 Ссылки сгенерированы\nПользователь: {uid}\n" + "\n".join(log_chunks)
+                log_message = f"🔗 Ссылки сгенерированы\nПользователь: {uid}\n" + "\n".join(log_chunks)
                 await send_chunked_message(LOG_CHANNEL_ID, log_message, parse_mode=None, reply_markup=None)
         except Exception as e:
             logging.error(f"user_id={uid} – Ошибка отправки лога в канал: {e}", extra={"user_id": uid})
@@ -211,7 +209,6 @@ async def send_resources_message(bot, user, uid, refresh=False, previous_message
             extra={"user_id": uid}
         )
         raise
-
 
 @router.callback_query(F.data.startswith("refresh_"))
 async def on_refresh(query: CallbackQuery):
