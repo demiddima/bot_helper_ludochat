@@ -55,3 +55,17 @@ class SubscriptionsMixin(BaseApi):
                 user_id, kind, e, extra={"user_id": user_id}
             )
             raise
+    async def delete_user_subscriptions(self, user_id: int) -> None:
+        try:
+            r = await self.client.delete(f"/subscriptions/{user_id}")
+            r.raise_for_status()
+            log.info(
+                "Подписки: удалены — user_id=%s",
+                user_id, extra={"user_id": user_id}
+            )
+        except Exception as e:
+            log.error(
+                "Подписки: ошибка удаления — user_id=%s, ошибка=%s",
+                user_id, e, extra={"user_id": user_id}
+            )
+            raise

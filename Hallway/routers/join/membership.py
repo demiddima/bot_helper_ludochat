@@ -132,12 +132,28 @@ async def on_my_chat_member(update: ChatMemberUpdated):
                 logging.error(f"user_id={user_id} – Ошибка подписки на бота: {exc}", extra={"user_id": user_id})
                 await log_and_report(exc, f"add_membership bot user={user_id}")
         elif status in ("left", "kicked"):
+            # 1) снимаем membership в БД
             try:
                 await remove_membership(user_id, config.BOT_ID)
                 logging.info(f"user_id={user_id} – Отписался от бота", extra={"user_id": user_id})
             except Exception as exc:
                 logging.error(f"user_id={user_id} – Ошибка отписки от бота: {exc}", extra={"user_id": user_id})
                 await log_and_report(exc, f"remove_membership bot user={user_id}")
+
+            # 2) удаляем запись user_subscriptions
+            try:
+                await db_api_client.delete_user_subscriptions(user_id)
+                logging.info(f"user_id={user_id} – Подписки удалены (user_subscriptions)", extra={"user_id": user_id})
+            except HTTPStatusError as exc:
+                # например, если записи уже нет — пусть будет warning
+                logging.warning(
+                    f"user_id={user_id} – HTTP {exc.response.status_code} при удалении подписок",
+                    extra={"user_id": user_id}
+                )
+                await log_and_report(exc, f"DELETE /subscriptions/{user_id}")
+            except Exception as exc:
+                logging.error(f"user_id={user_id} – Ошибка удаления подписок: {exc}", extra={"user_id": user_id})
+                await log_and_report(exc, f"DELETE /subscriptions/{user_id}")
         return
 
     # группы/каналы – статус бота
