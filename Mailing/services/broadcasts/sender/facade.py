@@ -1,224 +1,280 @@
 # Mailing/services/broadcasts/sender/facade.py
-# Публичные функции отправки (бывший sender.py), теперь внутри пакета.
-# Сигнатуры сохранены, импорты «как раньше» продолжают работать через __init__.
+# commit: refactor(sender/facade): smart-режим (one-message+kb vs split), альбом: текст с кнопкой; превью без лишних служебок; удалены старые билдеры
 
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, Message
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 
-from .policy import (
-    CAPTION_LIMIT,
-    ensure_caption_fits,
-    send_with_retry,
-    classify_exc,
-)
-from .transport import (
-    send_text,
-    send_single_media,
-    send_album,
-)
+from .policy import CAPTION_LIMIT, send_with_retry, classify_exc
+from .transport import send_text, send_single_media, send_album
 
+_HTML_RE = re.compile(r"<[^>]+>")
 
-def _split_files(files_field: Any) -> List[str]:
-    """Поддерживаем как строку 'id1,id2', так и массив."""
-    if not files_field:
-        return []
-    if isinstance(files_field, list):
-        vals = files_field
-    else:
-        vals = str(files_field).split(",")
-    return [str(x).strip() for x in vals if str(x).strip()]
-
-
-_HTML_RE = re.compile(r"<[^>]+>")  # грубый детектор HTML-тегов
-
-def _looks_like_html(s: str) -> bool:
+def _looks_like_html(s: Optional[str]) -> bool:
     return bool(s) and bool(_HTML_RE.search(s))
 
 
-# --- helper: отправка file_id с фолбэком по типу ---
-async def _send_file_with_fallback(
+# ---------------- классификация входа ----------------
+
+def _split_analyze(media_items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Распознаём сценарии:
+      - album(+text) → {"kind": "album", "album": [...], "text_html": "..."}
+      - single media  → {"kind": "single_media", "item": {...}}   # item = {"type":"media","payload":{...}}
+      - text-only     → {"kind": "text", "text_html": "..."}
+      - mixed         → {"kind": "mixed", "items": [...]}
+    Поддерживаем также исторический одиночный {"type":"photo|video|document","payload":{"file_id": "..."}}
+    """
+    model: Dict[str, Any] = {"kind": None}
+    if not media_items:
+        return model
+
+    first = media_items[0]
+    if first.get("type") == "album":
+        items = (first.get("payload") or {}).get("items") or []
+        model["kind"] = "album"
+        model["album"] = items
+        txt = ""
+        if len(media_items) >= 2 and media_items[1].get("type") in {"text", "html"}:
+            txt = (media_items[1].get("payload") or {}).get("text") or ""
+        model["text_html"] = txt
+        return model
+
+    if len(media_items) == 1 and media_items[0].get("type") == "media":
+        model["kind"] = "single_media"
+        model["item"] = media_items[0]  # целиком узел {"type":"media","payload":{...}}
+        return model
+
+    if len(media_items) == 1 and media_items[0].get("type") in {"text", "html"}:
+        model["kind"] = "text"
+        model["text_html"] = (media_items[0].get("payload") or {}).get("text") or ""
+        return model
+
+    # исторический одиночный медиа-тип
+    if len(media_items) == 1 and media_items[0].get("type") in {"photo", "video", "document"}:
+        t = media_items[0]["type"]
+        p = media_items[0].get("payload") or {}
+        model["kind"] = "single_media"
+        model["item"] = {"type": "media", "payload": {"kind": t, "file_id": p.get("file_id")}}
+        return model
+
+    model["kind"] = "mixed"
+    model["items"] = media_items
+    return model
+
+
+def _can_one_message_with_kb(model: Dict[str, Any]) -> bool:
+    """
+    Кнопки можно прикрепить к:
+      - тексту,
+      - одиночному медиа с подписью, которая укладывается в лимит caption.
+    К альбому кнопки не крепятся.
+    """
+    if model["kind"] == "text":
+        return True
+    if model["kind"] == "single_media":
+        p = (model["item"] or {}).get("payload") or {}
+        cap = (p.get("caption") or "").strip()
+        # если есть caption_entities — доверяем им; иначе проверяем длину caption
+        if cap and len(cap) > CAPTION_LIMIT:
+            return False
+        return True
+    return False  # album/mixed
+
+
+# ---------------- низкоуровневая отправка ----------------
+
+async def _send_text(
+    bot: Bot, chat_id: int, text_html: str, kb: Optional[InlineKeyboardMarkup]
+) -> Tuple[bool, Optional[int], Optional[str], Optional[str]]:
+    msg, code, err = await send_with_retry(
+        send_text(bot, chat_id, text_html, parse_html=_looks_like_html(text_html), reply_markup=kb)
+    )
+    if code:
+        return False, None, code, err
+    return True, (msg.message_id if msg else None), None, None
+
+
+async def _send_single(
+    bot: Bot, chat_id: int, item_payload: Dict[str, Any], kb: Optional[InlineKeyboardMarkup]
+) -> Tuple[bool, Optional[int], Optional[str], Optional[str]]:
+    payload = {
+        "file_id": item_payload.get("file_id"),
+        "caption": item_payload.get("caption"),
+        "caption_entities": item_payload.get("caption_entities"),
+    }
+    parse_cap_html = bool(payload["caption"] and not payload.get("caption_entities") and _looks_like_html(payload["caption"]))
+    msg, code, err = await send_with_retry(
+        send_single_media(
+            bot,
+            chat_id,
+            item_payload.get("kind", "document"),
+            payload,
+            parse_caption_html=parse_cap_html,
+            reply_markup=kb,
+        )
+    )
+    if code:
+        return False, None, code, err
+    return True, (msg.message_id if msg else None), None, None
+
+
+async def _send_album_split(
     bot: Bot,
     chat_id: int,
-    payload: dict,
-    *,
-    primary: str = "document",
-    parse_caption_html: bool = False,
-) -> Tuple[Optional[Message], Optional[str], Optional[str]]:
+    album_items: List[Dict[str, Any]],
+    text_html: Optional[str],
+    kb_for_text: Optional[InlineKeyboardMarkup],
+    preview_mode: bool,
+) -> Tuple[bool, Optional[Union[int, List[int]]], Optional[str], Optional[str]]:
     """
-    Пробуем отправить file_id как primary-тип.
-    Если BadRequest (например, "Photo as Document") — пробуем другие типы.
-    Порядок: primary → photo → video → document.
+    Альбом всегда уходит группой (без кнопок и без caption).
+    Затем — текст (если есть) с кнопкой; если текста нет, то:
+      - в превью добавляем служебное сообщение с кнопками,
+      - в бою — кнопок нет совсем.
     """
-    order = [primary] + [t for t in ("photo", "video", "document") if t != primary]
-    last_err: Tuple[Optional[str], Optional[str]] = (None, None)
+    try:
+        msgs = await send_album(bot, chat_id, album_items)  # sendMediaGroup
+        ids = [m.message_id for m in (msgs or [])]
+        last_id: Optional[int] = ids[-1] if ids else None
 
-    for media_type in order:
-        msg, code, err = await send_with_retry(
-            send_single_media(bot, chat_id, media_type, payload, parse_caption_html=parse_caption_html)
-        )
-        if code is None:
-            return msg, None, None
-        if code != "BadRequest":
-            return None, code, err
-        last_err = (code, err)
+        txt = (text_html or "").strip()
+        if txt:
+            ok, mid, code, err = await _send_text(bot, chat_id, txt, kb_for_text)
+            if not ok:
+                return False, None, code, err
+            if isinstance(mid, int):
+                ids.append(mid)
+                last_id = mid
+        elif preview_mode and kb_for_text:
+            ok, mid, code, err = await _send_text(bot, chat_id, "Предпросмотр. Подтвердить отправку или исправить?", kb_for_text)
+            if not ok:
+                return False, None, code, err
+            if isinstance(mid, int):
+                ids.append(mid)
+                last_id = mid
 
-    return None, last_err[0], last_err[1]
+        return True, (ids if ids else last_id), None, None
+    except Exception as e:
+        return False, None, "SendMediaGroupFailed", str(e)
 
+
+# ---------------- публичные функции ----------------
 
 async def send_preview(
     bot: Bot,
     chat_id: int,
     media: List[Dict[str, Any]],
     kb: Optional[InlineKeyboardMarkup] = None,
-) -> Tuple[bool, Optional[int], Optional[str], Optional[str]]:
+) -> Tuple[bool, Optional[Union[int, List[int]]], Optional[str], Optional[str]]:
     """
-    Отправляет media (формат ContentBuilder.make_media_items()) как предпросмотр.
-    Возвращает: (ok, last_msg_id|None, error_code|None, error_message|None)
+    SMART-превью:
+      - если можно одним сообщением с кнопкой (text/single c допустимой подписью) → отправляем одним;
+      - иначе split: альбом → текст с кнопкой;
+        для альбома без текста — в превью добавляем служебное сообщение с кнопками.
     """
-    last_msg: Optional[Message] = None
-
     try:
-        for item in media:
-            t = (item.get("type") or "").lower()
-            payload = item.get("payload") or {}
+        model = _split_analyze(media)
 
-            if t in {"text", "html"}:
-                text = str(payload.get("text") or "").strip()
-                entities = payload.get("entities")
-                parse_html = False if entities else _looks_like_html(text)
-                msg, code, err = await send_with_retry(
-                    send_text(bot, chat_id, text, entities=entities, parse_html=parse_html)
-                )
-                if code:
-                    return False, (last_msg.message_id if last_msg else None), code, err
-                last_msg = msg
+        # 1) one-message + kb
+        if _can_one_message_with_kb(model):
+            if model["kind"] == "text":
+                return await _send_text(bot, chat_id, model["text_html"], kb)
+            else:  # single_media
+                return await _send_single(bot, chat_id, (model["item"] or {}).get("payload") or {}, kb)
 
-            elif t in {"photo", "video", "document"}:
-                cap = payload.get("caption")
-                cap_entities = payload.get("caption_entities")
-                if cap:
-                    ensure_caption_fits(cap)
-                parse_caption_html = False if cap_entities else _looks_like_html(cap or "")
+        # 2) split-ветки
+        if model["kind"] == "album":
+            return await _send_album_split(bot, chat_id, model.get("album") or [], model.get("text_html"), kb, preview_mode=True)
 
-                msg, code, err = await send_with_retry(
-                    send_single_media(bot, chat_id, t, payload, parse_caption_html=parse_caption_html)
-                )
-                if code:
-                    return False, (last_msg.message_id if last_msg else None), code, err
-                last_msg = msg
-
-            elif t == "album":
-                items = (payload or {}).get("items") or []
-                if items:
-                    last = items[-1]
-                    cap = (last.get("payload") or {}).get("caption")
-                    if cap:
-                        ensure_caption_fits(cap)
-                msgs, code, err = await send_with_retry(send_album(bot, chat_id, items))
-                if code:
-                    return False, (last_msg.message_id if last_msg else None), code, err
-                if msgs:
-                    last_msg = msgs[-1]
-
-            else:
-                continue
-
-        if kb and last_msg:
-            try:
-                await bot.edit_message_reply_markup(chat_id=chat_id, message_id=last_msg.message_id, reply_markup=kb)
-            except Exception:
-                pass
-
-        if last_msg is None:
-            return False, None, "NoMessages", "nothing was sent"
-        return True, last_msg.message_id, None, None
-
-    except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter) as e:
-        return False, (last_msg.message_id if last_msg else None), classify_exc(e), str(e)
-    except Exception as e:
-        return False, (last_msg.message_id if last_msg else None), "Unknown", str(e)
-
-
-async def send_content_json(
-    bot: Bot,
-    user_id: int,
-    content: Dict[str, Any],
-) -> Tuple[bool, Optional[int], Optional[str], Optional[str]]:
-    """
-    Старый формат: {"text": "<HTML>", "files": "id1,id2"}
-    Если files → пробуем каждое как document, при BadRequest fallback photo→video→document.
-    """
-    text = (content.get("text") or "").strip()
-    files = _split_files(content.get("files"))
-
-    last_msg_id: Optional[int] = None
-
-    try:
-        if not files and text:
-            parse_html = _looks_like_html(text)
-            msg, code, err = await send_with_retry(
-                send_text(bot, user_id, text, entities=None, parse_html=parse_html)
-            )
-            if code:
+        if model["kind"] == "single_media":
+            # подпись не влазит — split: сначала файл без caption, затем текст с кнопкой
+            p = (model["item"] or {}).get("payload") or {}
+            file_only = {"kind": p.get("kind"), "file_id": p.get("file_id")}
+            ok, _, code, err = await _send_single(bot, chat_id, file_only, kb=None)
+            if not ok:
                 return False, None, code, err
-            return True, msg.message_id if msg else None, None, None
+            return await _send_text(bot, chat_id, (p.get("caption") or ""), kb)
 
-        caption_used = False
-        for file_id in files:
-            payload = {"file_id": file_id}
-            cap_here = None
-            parse_caption_html = False
-            if text and not caption_used:
-                try:
-                    ensure_caption_fits(text)
-                    cap_here = text
-                    parse_caption_html = _looks_like_html(text)
-                    caption_used = True
-                except ValueError:
-                    cap_here = None
-                    parse_caption_html = False
-
-            if cap_here:
-                payload["caption"] = cap_here
-
-            msg, code, err = await _send_file_with_fallback(
-                bot, user_id, payload, primary="document", parse_caption_html=parse_caption_html
-            )
-            if code:
-                return False, last_msg_id, code, err
-            if msg:
-                last_msg_id = msg.message_id
-
-        if text and not caption_used:
-            parse_html = _looks_like_html(text)
-            msg, code, err = await send_with_retry(send_text(bot, user_id, text, entities=None, parse_html=parse_html))
-            if code:
-                return False, last_msg_id, code, err
-            if msg:
-                last_msg_id = msg.message_id
-
-        return True, last_msg_id, None, None
+        # 3) mixed: отправляем по одному, кнопку — на последнем
+        last_mid: Optional[int] = None
+        for idx, el in enumerate(model.get("items") or []):
+            last = idx == len(model["items"]) - 1
+            t = el.get("type")
+            p = el.get("payload") or {}
+            if t in {"text", "html"}:
+                ok, mid, code, err = await _send_text(bot, chat_id, p.get("text") or "", kb if last else None)
+            elif t == "media":
+                ok, mid, code, err = await _send_single(bot, chat_id, p, kb if last else None)
+            else:
+                return False, None, "UnknownItemType", f"type={t}"
+            if not ok:
+                return False, None, code, err
+            if isinstance(mid, int):
+                last_mid = mid
+        return True, last_mid, None, None
 
     except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter) as e:
-        return False, last_msg_id, classify_exc(e), str(e)
+        return False, None, classify_exc(e), str(e)
     except Exception as e:
-        return False, last_msg_id, "Unknown", str(e)
+        return False, None, "Unknown", str(e)
 
 
-async def send_html(bot: Bot, user_id: int, html: str) -> bool:
+async def send_actual(
+    bot: Bot,
+    chat_id: int,
+    media: List[Dict[str, Any]],
+    kb_for_text: Optional[InlineKeyboardMarkup] = None,
+) -> Tuple[bool, Optional[Union[int, List[int]]], Optional[str], Optional[str]]:
+    """
+    SMART-боевая отправка:
+      - если можно одним сообщением с кнопкой (text/single) → одним;
+      - иначе split: альбом (без кнопок) → текст с кнопкой; если текста нет — только альбом.
+    """
     try:
-        msg, code, err = await send_with_retry(send_text(bot, user_id, html, entities=None, parse_html=True))
-        return msg is not None and code is None
-    except Exception:
-        return False
+        model = _split_analyze(media)
 
+        if _can_one_message_with_kb(model):
+            if model["kind"] == "text":
+                return await _send_text(bot, chat_id, model["text_html"], kb_for_text)
+            else:
+                return await _send_single(bot, chat_id, (model["item"] or {}).get("payload") or {}, kb_for_text)
 
-async def send_media(bot: Bot, user_id: int, media: List[Dict[str, Any]]) -> bool:
-    ok, _, _, _ = await send_preview(bot, user_id, media, kb=None)
-    return ok
+        if model["kind"] == "album":
+            return await _send_album_split(bot, chat_id, model.get("album") or [], model.get("text_html"), kb_for_text, preview_mode=False)
+
+        if model["kind"] == "single_media":
+            p = (model["item"] or {}).get("payload") or {}
+            file_only = {"kind": p.get("kind"), "file_id": p.get("file_id")}
+            ok, _, code, err = await _send_single(bot, chat_id, file_only, kb=None)
+            if not ok:
+                return False, None, code, err
+            return await _send_text(bot, chat_id, (p.get("caption") or ""), kb_for_text)
+
+        # mixed: по одному; кнопка — на последнем
+        last_mid: Optional[int] = None
+        for idx, el in enumerate(model.get("items") or []):
+            last = idx == len(model["items"]) - 1
+            t = el.get("type")
+            p = el.get("payload") or {}
+            if t in {"text", "html"}:
+                ok, mid, code, err = await _send_text(bot, chat_id, p.get("text") or "", kb_for_text if last else None)
+            elif t == "media":
+                ok, mid, code, err = await _send_single(bot, chat_id, p, kb_for_text if last else None)
+            else:
+                return False, None, "UnknownItemType", f"type={t}"
+            if not ok:
+                return False, None, code, err
+            if isinstance(mid, int):
+                last_mid = mid
+        return True, last_mid, None, None
+
+    except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter) as e:
+        return False, None, classify_exc(e), str(e)
+    except Exception as e:
+        return False, None, "Unknown", str(e)

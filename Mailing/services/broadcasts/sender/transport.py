@@ -1,5 +1,5 @@
 # Mailing/services/broadcasts/sender/transport.py
-# Транспортный слой: строгий маппинг типов на методы Bot.
+# Commit: fix(transport): единый маппинг типов, reply_markup, корректные альбомы
 
 from __future__ import annotations
 
@@ -20,10 +20,7 @@ def _as_entities(seq: Optional[Sequence[Any]]) -> Optional[List[MessageEntity]]:
         return None
     out: List[MessageEntity] = []
     for e in seq:
-        if isinstance(e, MessageEntity):
-            out.append(e)
-        else:
-            out.append(MessageEntity.model_validate(e))
+        out.append(e if isinstance(e, MessageEntity) else MessageEntity.model_validate(e))
     return out
 
 
@@ -34,20 +31,15 @@ async def send_text(
     *,
     entities: Optional[Sequence[Any]] = None,
     parse_html: bool = False,
+    reply_markup: Optional[Any] = None,
 ) -> Message:
+    if entities:
+        return await bot.send_message(chat_id=chat_id, text=text, entities=entities, reply_markup=reply_markup)
     if parse_html:
         return await bot.send_message(
-            chat_id,
-            text,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
+            chat_id=chat_id, text=text, parse_mode="HTML", reply_markup=reply_markup, disable_web_page_preview=True
         )
-    return await bot.send_message(
-        chat_id,
-        text,
-        entities=_as_entities(entities),
-        disable_web_page_preview=True,
-    )
+    return await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, disable_web_page_preview=True)
 
 
 async def send_single_media(
@@ -57,58 +49,30 @@ async def send_single_media(
     payload: Dict[str, Any],
     *,
     parse_caption_html: bool = False,
+    reply_markup: Optional[Any] = None,
 ) -> Message:
-    """
-    media_type: 'photo' | 'video' | 'document'
-    payload: {'file_id': str, 'caption'?: str, 'caption_entities'?: list[MessageEntity|dict]}
-    """
     file_id = str(payload.get("file_id"))
     caption = payload.get("caption")
     caption_entities = _as_entities(payload.get("caption_entities"))
 
+    parse_mode = None
+    if parse_caption_html and caption and not caption_entities and ("<" in caption and ">" in caption):
+        parse_mode = "HTML"
+
     if media_type == "photo":
         return await bot.send_photo(
-            chat_id,
-            file_id,
-            caption=caption,
-            caption_entities=None if parse_caption_html else caption_entities,
-            parse_mode="HTML" if parse_caption_html else None,
+            chat_id, file_id, caption=caption, caption_entities=caption_entities, reply_markup=reply_markup, parse_mode=parse_mode
         )
     if media_type == "video":
         return await bot.send_video(
-            chat_id,
-            file_id,
-            caption=caption,
-            caption_entities=None if parse_caption_html else caption_entities,
-            parse_mode="HTML" if parse_caption_html else None,
+            chat_id, file_id, caption=caption, caption_entities=caption_entities, reply_markup=reply_markup, parse_mode=parse_mode
         )
-    if media_type == "document":
-        return await bot.send_document(
-            chat_id,
-            file_id,
-            caption=caption,
-            caption_entities=None if parse_caption_html else caption_entities,
-            parse_mode="HTML" if parse_caption_html else None,
-        )
-
-    # Неподдерживаемый тип — безопасный fallback как документ
     return await bot.send_document(
-        chat_id,
-        file_id,
-        caption=caption,
-        caption_entities=None if parse_caption_html else caption_entities,
-        parse_mode="HTML" if parse_caption_html else None,
+        chat_id, file_id, caption=caption, caption_entities=caption_entities, reply_markup=reply_markup
     )
 
 
 async def send_album(bot: Bot, chat_id: int, items: List[Dict[str, Any]]) -> List[Message]:
-    """
-    items: список элементов формата {'type': 'photo'|'video'|'document', 'payload': {...}}
-    Telegram принимает до 10 элементов в альбоме.
-    Особенности совместимости:
-      - caption у DOCUMENT в альбоме НЕ ставим (как в старом монолите);
-      - если у элемента нет caption_entities и есть caption «с HTML» — используем parse_mode=HTML.
-    """
     if not items:
         return []
 
@@ -117,20 +81,10 @@ async def send_album(bot: Bot, chat_id: int, items: List[Dict[str, Any]]) -> Lis
         t = (it.get("type") or "document").lower()
         p = it.get("payload") or {}
         file_id = str(p.get("file_id"))
-        caption = p.get("caption")
-        caption_entities = _as_entities(p.get("caption_entities"))
-
-        # parse_mode=HTML только при отсутствии entities и наличии "похожего на HTML" текста
-        parse_mode = None
-        if caption and not caption_entities and ("<" in caption and ">" in caption):
-            parse_mode = "HTML"
-
         if t == "photo":
-            media.append(InputMediaPhoto(media=file_id, caption=caption, caption_entities=caption_entities, parse_mode=parse_mode))
+            media.append(InputMediaPhoto(media=file_id))
         elif t == "video":
-            media.append(InputMediaVideo(media=file_id, caption=caption, caption_entities=caption_entities, parse_mode=parse_mode))
+            media.append(InputMediaVideo(media=file_id))
         else:
-            # Для документа в альбоме подпись убираем (совместимость)
             media.append(InputMediaDocument(media=file_id))
-
     return await bot.send_media_group(chat_id, media)

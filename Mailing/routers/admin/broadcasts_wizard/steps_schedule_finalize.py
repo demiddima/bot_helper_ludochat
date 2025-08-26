@@ -1,9 +1,10 @@
-# handlers/admin/broadcasts_wizard/steps_schedule_finalize.py
-# commit: extract schedule + finalize; save content as text/files; no invalid 'queued' status
+# Mailing/routers/admin/broadcasts_wizard/steps_schedule_finalize.py
+# commit: fix(wizard/finalize): сохраняем content как {"text": "...", "files": "id1,id2,..."} из media_items
+
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Optional, Union, List, Dict, Any
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from aiogram import Router, F
@@ -11,7 +12,7 @@ from aiogram.types import Message, CallbackQuery, ContentType
 from aiogram.fsm.context import FSMContext
 
 from . import PostWizard
-from Mailing.keyboards.broadcasts_wizard import kb_schedule
+from Mailing.keyboards.broadcasts_wizard import kb_schedule  # на будущее
 from common.utils.time_msk import parse_msk
 from common.db_api import db_api_client
 from Mailing.services.broadcasts.service import try_send_now
@@ -22,40 +23,47 @@ router = Router(name="admin_broadcasts_wizard.schedule_finalize")
 MSK = ZoneInfo("Europe/Moscow")
 
 
-def _media_items_to_text_files(media: List[Dict[str, Any]]) -> Tuple[str, str]:
-    text_html: str = ""
-    file_ids: List[str] = []
-    last_caption: Optional[str] = None
+def _to_csv_content(media_items: List[Dict[str, Any]]) -> Dict[str, str]:
+    """
+    Преобразуем unified media_items в ожидаемый backend-формат:
+      {"text": "<html...>", "files": "id1,id2,..."}
+    Правила:
+      - text берём из ПОСЛЕДНЕГО элемента {"type":"text"|"html"} или caption у single media, если текст отсутствует.
+      - file_id собираем из:
+         * {"type":"media"} → payload.file_id
+         * {"type":"album"} → из каждого items[i].payload.file_id (до 10 шт — лимит TG)
+      - порядок сохраняем.
+    """
+    text = ""
+    ids: List[str] = []
 
-    for item in media or []:
-        t = (item.get("type") or "").lower()
-        payload = item.get("payload") or {}
+    for el in media_items or []:
+        t = (el.get("type") or "").lower()
+        p = el.get("payload") or {}
 
         if t in {"text", "html"}:
-            txt = (payload.get("text") or "").strip()
-            if txt and not text_html:
-                text_html = txt
-        elif t in {"photo", "video", "document"}:
-            fid = str(payload.get("file_id") or "").strip()
+            txt = (p.get("text") or "").strip()
+            if txt:
+                text = txt
+
+        elif t == "media":
+            fid = (p.get("file_id") or "").strip()
             if fid:
-                file_ids.append(fid)
-            cap = (payload.get("caption") or "").strip()
-            if cap:
-                last_caption = cap
-        elif t == "album":
-            for sub in (payload.get("items") or []):
-                sp = sub.get("payload") or {}
-                fid = str(sp.get("file_id") or "").strip()
-                if fid:
-                    file_ids.append(fid)
-                cap = (sp.get("caption") or "").strip()
+                ids.append(fid)
+            # если текста ещё не было — можно взять caption как текст
+            if not text:
+                cap = (p.get("caption") or "").strip()
                 if cap:
-                    last_caption = cap
+                    text = cap
 
-    if not text_html and last_caption:
-        text_html = last_caption
+        elif t == "album":
+            items = (p.get("items") or [])[:10]  # лимит TG 10
+            for it in items:
+                it_fid = ((it.get("payload") or {}).get("file_id") or "").strip()
+                if it_fid:
+                    ids.append(it_fid)
 
-    return text_html, ",".join(file_ids)
+    return {"text": text, "files": ",".join(ids)}
 
 
 @router.callback_query(PostWizard.choose_schedule, F.data == "sch:now")
@@ -86,7 +94,7 @@ async def sch_manual_input(message: Message, state: FSMContext):
 
 async def _finalize_and_start(evt: Union[Message, CallbackQuery], state: FSMContext, *, mode: str, at: Optional[datetime]):
     data = await state.get_data()
-    media_items = data.get("content_media")
+    media_items = data.get("content_media")  # unified формат превью
     title = data.get("title")
     kind = data.get("kind")
     target = data.get("target")
@@ -100,17 +108,17 @@ async def _finalize_and_start(evt: Union[Message, CallbackQuery], state: FSMCont
         await state.clear()
         return
 
-    # Создаём черновик в старом формате {text, files}
-    text_html, files_csv = _media_items_to_text_files(media_items)
+    # ВАЖНО: backend ожидает {"text": "...", "files": "id1,id2,..."}
+    content_csv = _to_csv_content(media_items)
+
     br = await db_api_client.create_broadcast(
         kind=kind,
         title=title,
-        content={"text": text_html, "files": files_csv},
+        content=content_csv,
         status="draft",
     )
     await db_api_client.put_broadcast_target(br["id"], target)
 
-    # Отправка / планирование
     bot = evt.message.bot if isinstance(evt, CallbackQuery) else evt.bot
     if mode == "now":
         await try_send_now(bot, br["id"])

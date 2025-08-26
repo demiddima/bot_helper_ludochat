@@ -1,93 +1,135 @@
 # services/content_builder.py
-# Сбор и нормализация медиа под формат отправителя (text/caption/entities/album)
+# Commit: fix(content): одиночный файл + текст → caption внутри media; альбом — без текста (пусть фасад решает)
 
 from __future__ import annotations
 
-import logging
-import asyncio
 from typing import Any, Dict, List, Optional
-
-import config
-from common.utils.common import log_and_report  # отчёт в ERROR_LOG_CHANNEL_ID
-
-log = logging.getLogger(__name__)
+from aiogram.types import Message
 
 
-def _take_caption(src: Dict[str, Any]) -> Optional[str]:
-    return src.get("caption") or None
+def _norm_type(t: str) -> str:
+    t = (t or "").lower()
+    if t in {"photo", "image", "pic"}:
+        return "photo"
+    if t in {"video", "mp4"}:
+        return "video"
+    if t in {"document", "doc", "file"}:
+        return "document"
+    return "document"
 
 
-def _take_entities(src: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
-    ents = src.get("caption_entities")
-    return ents if ents else None
+def _mk_text(text_html: str) -> Dict[str, Any]:
+    return {"type": "html", "payload": {"text": text_html}}
 
 
-def make_media_items(collected: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _mk_media_item(mtype: str, file_id: str, *, caption: Optional[str] = None) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {"file_id": str(file_id)}
+    if caption:
+        payload["caption"] = caption
+    return {"type": _norm_type(mtype), "payload": payload}
+
+
+def _mk_album(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    return {"type": "album", "payload": {"items": items[:10]}}
+
+
+def make_media_items_from_event(msg: Message, album: Optional[List[Message]] = None) -> List[Dict[str, Any]]:
     """
-    Нормализует контент в единый формат:
-      • текст → payload['text'] (HTML)
-      • подписи → payload['caption'] + payload['caption_entities']
-      • альбом → payload['items'] (каждый элемент с caption/entities)
+    Преобразует вход от Telegram в items:
+      - одиночный файл + текст → ОДИН media-элемент с caption
+      - одиночный файл без текста → ОДИН media-элемент
+      - только текст → ОДИН html-элемент
+      - альбом → ОДИН album-элемент (без текста); текст не прикрепляем — фасад решит, что с ним делать
     """
-    try:
-        items: List[Dict[str, Any]] = []
+    items: List[Dict[str, Any]] = []
 
-        # Текст (как HTML-блок)
-        text_html = (collected or {}).get("text_html")
-        if text_html:
-            items.append({"type": "html", "payload": {"text": text_html}, "position": 0})
-
-        # Одиночные медиа
-        single_media = (collected or {}).get("single_media") or []
-        for it in single_media:
-            payload = {"file_id": it["file_id"]}
-            cap = _take_caption(it)
-            if cap:
-                payload["caption"] = cap
-            ents = _take_entities(it)
-            if ents:
-                payload["caption_entities"] = ents
-            items.append({"type": it["type"], "payload": payload, "position": len(items)})
-
-        # Альбом
-        album = (collected or {}).get("album") or []
-        if album:
-            norm_items: List[Dict[str, Any]] = []
-            for el in album[:10]:
-                t = el.get("type")
-                file_id = el.get("file_id") or (el.get("payload") or {}).get("file_id")
-                norm = {"type": t, "payload": {"file_id": file_id}}
-
-                cap = _take_caption(el)
-                if cap:
-                    norm["payload"]["caption"] = cap
-                ents = _take_entities(el)
-                if ents:
-                    norm["payload"]["caption_entities"] = ents
-
-                norm_items.append(norm)
-
-            items.append({"type": "album", "payload": {"items": norm_items}, "position": len(items)})
-
-        logging.info(
-            "Сбор медиа завершён: текст=%s, одиночных=%s, в_альбоме=%s, всего_объектов=%s",
-            "да" if bool(text_html) else "нет",
-            len(single_media),
-            len(album),
-            len(items),
-            extra={"user_id": config.BOT_ID},
-        )
+    # Альбом: отдаём только файлы; текст отдельно не прикладываем (фасад сам проверит «одно сообщение»)
+    if album:
+        batch: List[Dict[str, Any]] = []
+        for m in album[:10]:
+            if m.photo:
+                batch.append(_mk_media_item("photo", m.photo[-1].file_id))
+            elif m.video:
+                batch.append(_mk_media_item("video", m.video.file_id))
+            elif m.document:
+                batch.append(_mk_media_item("document", m.document.file_id))
+        if batch:
+            items.append(_mk_album(batch))
         return items
 
-    except Exception as exc:
-        logging.error(
-            "Сбор медиа не выполнен: ошибка=%s",
-            exc,
-            extra={"user_id": config.BOT_ID},
-        )
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(log_and_report(exc, "сбор медиа"))
-        except Exception:
-            pass
-        return []
+    # Одиночные медиа: caption берём прямо из сообщения и вкладываем в payload
+    if msg.photo:
+        cap = (msg.caption_html or msg.caption or "").strip() or None
+        items.append(_mk_media_item("photo", msg.photo[-1].file_id, caption=cap))
+        return items
+
+    if msg.video:
+        cap = (msg.caption_html or msg.caption or "").strip() or None
+        items.append(_mk_media_item("video", msg.video.file_id, caption=cap))
+        return items
+
+    if msg.document:
+        cap = (msg.caption_html or msg.caption or "").strip() or None
+        items.append(_mk_media_item("document", msg.document.file_id, caption=cap))
+        return items
+
+    # Только текст
+    if msg.text:
+        items.append(_mk_text(msg.html_text or msg.text))
+        return items
+
+    return items
+
+
+# Совместимость со старым кодом: поддержка собранного словаря collected
+def make_media_items(collected: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    collected:
+      {
+        "text_html": Optional[str],
+        "single_media": List[{"type": "photo|video|document", "file_id": str, "caption"?: str}],
+        "album": List[{"type": "photo|video|document", "file_id": str}],
+      }
+    """
+    text_html = (collected.get("text_html") or "").strip()
+    single_media = collected.get("single_media") or []
+    album = collected.get("album") or []
+
+    items: List[Dict[str, Any]] = []
+
+    if album:
+        batch = []
+        for it in album[:10]:
+            t = _norm_type(it.get("type"))
+            fid = str(it.get("file_id") or "").strip()
+            if fid:
+                batch.append({"type": t, "payload": {"file_id": fid}})
+        if batch:
+            items.append(_mk_album(batch))
+            return items
+
+    if len(single_media) == 1:
+        it = single_media[0]
+        t = _norm_type(it.get("type"))
+        fid = str(it.get("file_id") or "").strip()
+        cap = (it.get("caption") or text_html or "").strip() or None
+        if fid:
+            items.append(_mk_media_item(t, fid, caption=cap))
+        return items
+
+    if text_html and not single_media:
+        items.append(_mk_text(text_html))
+        return items
+
+    # несколько single_media → считаем альбомом (без текста)
+    if len(single_media) > 1:
+        batch = []
+        for it in single_media[:10]:
+            t = _norm_type(it.get("type"))
+            fid = str(it.get("file_id") or "").strip()
+            if fid:
+                batch.append({"type": t, "payload": {"file_id": fid}})
+        if batch:
+            items.append(_mk_album(batch))
+
+    return items

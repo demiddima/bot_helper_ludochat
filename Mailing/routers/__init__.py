@@ -1,15 +1,17 @@
+# Mailing/routers/__init__.py
+# commit: fix(routers) — убрали silent-import; явное подключение и лог
 from aiogram import Router
+import logging
 
 router = Router(name="mailing")
+log = logging.getLogger(__name__)
 
-try:
-    from .admin.broadcasts_commands import router as broadcasts_commands_router
-    router.include_router(broadcasts_commands_router)
-except Exception:
-    pass
+# Явные импорты: если что-то сломано — увидим стектрейс и быстро чиним
+from .admin import broadcasts_wizard as _bw
+from .admin import broadcasts_commands as _bc
 
-try:
-    from .admin.broadcasts_wizard import router as broadcasts_wizard_router
-    router.include_router(broadcasts_wizard_router)
-except Exception:
-    pass
+# Порядок важен: визард выше, чтобы /post гарантированно ловился здесь
+router.include_router(_bw.router)
+router.include_router(_bc.router)
+
+log.info("[mailing] routers loaded: broadcasts_wizard, broadcasts_commands")

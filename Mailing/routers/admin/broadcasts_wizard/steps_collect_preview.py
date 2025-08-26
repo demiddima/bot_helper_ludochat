@@ -1,10 +1,11 @@
-# handlers/admin/broadcasts_wizard/steps_collect_preview.py
-# commit: extract collecting & preview flow; album debounce, preview send
+# Mailing/routers/admin/broadcasts_wizard/steps_collect_preview.py
+# commit: refactor(wizard) — AlbumsMiddleware; единый хендлер на пакет; превью через smart-логика sender’а
+
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any, Dict, List, Optional
+
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, ContentType, MessageEntity
@@ -13,13 +14,17 @@ from aiogram.fsm.context import FSMContext
 from . import PostWizard
 from Mailing.keyboards.broadcasts_wizard import kb_preview
 from Mailing.services.broadcasts.sender import send_preview, CAPTION_LIMIT
-from Mailing.services.content_builder import make_media_items
+
+# ВАЖНО: используем ваш middleware, чтобы альбом прилетал одним списком сообщений
+from common.middlewares.albums import AlbumsMiddleware  # если модуль у тебя в другом месте — оставь текущий импорт
 
 log = logging.getLogger(__name__)
+
 router = Router(name="admin_broadcasts_wizard.collect_preview")
+router.message.middleware(AlbumsMiddleware(wait=0.6))  # один вызов на всю группу
 
 
-# ---------- helpers ----------
+# ---------- helpers: приводим вход к единому media_items ----------
 
 def _dump_entities(ents: Optional[List[MessageEntity]]) -> Optional[List[Dict[str, Any]]]:
     if not ents:
@@ -35,89 +40,52 @@ def _text_html(msg: Message) -> str:
 def _caption_html(msg: Message) -> str:
     return (getattr(msg, "caption_html", None) or msg.caption or "").strip()
 
-def _collected_from_single_message(msg: Message) -> Dict[str, Any]:
+def _from_single_message(msg: Message) -> List[Dict[str, Any]]:
+    """Текст либо одно медиа — в единый формат sender’а."""
     if msg.content_type == ContentType.TEXT:
         text_html = _text_html(msg)
-        return {"text_html": text_html} if text_html else {}
+        return [{"type": "text", "payload": {"text": text_html}}] if text_html else []
 
     if msg.content_type in {ContentType.PHOTO, ContentType.VIDEO, ContentType.DOCUMENT}:
         if msg.photo:
-            t, fid = "photo", msg.photo[-1].file_id
+            kind, fid = "photo", msg.photo[-1].file_id
         elif msg.video:
-            t, fid = "video", msg.video.file_id
+            kind, fid = "video", msg.video.file_id
         elif msg.document:
-            t, fid = "document", msg.document.file_id
+            kind, fid = "document", msg.document.file_id
         else:
-            return {}
-
+            return []
         cap = _caption_html(msg)
         ents = _dump_entities(msg.caption_entities)
-        return {
-            "single_media": [{
-                "type": t,
-                "file_id": fid,
-                "caption": cap if cap else None,
-                "caption_entities": ents if ents else None,
-            }]
-        }
+        payload: Dict[str, Any] = {"kind": kind, "file_id": fid}
+        if cap:
+            payload["caption"] = cap
+        if ents:
+            payload["caption_entities"] = ents
+        return [{"type": "media", "payload": payload}]
 
-    return {}
+    return []
 
-def _append_album_piece(bucket: Dict[str, Any], msg: Message) -> None:
-    if msg.photo:
-        t, fid = "photo", msg.photo[-1].file_id
-    elif msg.video:
-        t, fid = "video", msg.video.file_id
-    elif msg.document:
-        t, fid = "document", msg.document.file_id
-    else:
-        return
+def _from_album(messages: List[Message]) -> List[Dict[str, Any]]:
+    """Альбом: собираем file_id’ы; общий текст берём из последней непустой подписи."""
+    items: List[Dict[str, Any]] = []
+    last_text = ""
+    for m in messages[:10]:  # лимит TG на sendMediaGroup
+        if m.photo:
+            items.append({"type": "photo", "payload": {"file_id": m.photo[-1].file_id}})
+        elif m.video:
+            items.append({"type": "video", "payload": {"file_id": m.video.file_id}})
+        elif m.document:
+            items.append({"type": "document", "payload": {"file_id": m.document.file_id}})
+        # собираем общий текст из последней непустой подписи
+        cap = _caption_html(m)
+        if cap:
+            last_text = cap
 
-    cap = _caption_html(msg)
-    ents = _dump_entities(msg.caption_entities)
-
-    bucket.setdefault("items", []).append({
-        "type": t,
-        "file_id": fid,
-        "caption": cap if cap else None,
-        "caption_entities": ents if ents else None,
-    })
-
-async def _safe_clear_kb(cb: CallbackQuery) -> None:
-    try:
-        await cb.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-
-async def _finalize_album_preview(message: Message, state: FSMContext, media_group_id: str) -> None:
-    await asyncio.sleep(0.8)
-    data = await state.get_data()
-    bucket = (data or {}).get("album_bucket")
-    if not bucket or bucket.get("id") != media_group_id:
-        return
-
-    album_items: List[Dict[str, Any]] = []
-    for el in bucket.get("items", [])[:10]:
-        entry = {"type": el["type"], "payload": {"file_id": el["file_id"]}}
-        if el.get("caption"):
-            entry["payload"]["caption"] = el["caption"]
-        if el.get("caption_entities"):
-            entry["payload"]["caption_entities"] = el["caption_entities"]
-        album_items.append(entry)
-
-    media_items = [{"type": "album", "payload": {"items": album_items}, "position": 0}]
-
-    ok, _, code, err = await send_preview(message.bot, message.chat.id, media_items, kb=kb_preview())
-    if not ok:
-        if code == "CaptionTooLong":
-            await message.answer(f"❌ Подпись в альбоме длиннее {CAPTION_LIMIT} символов. Сократи текст и пришли заново.")
-        else:
-            await message.answer(f"❌ Превью не отправилось: {code or 'Unknown'} — {err or ''}")
-        await state.update_data(album_bucket=None)
-        return
-
-    await state.update_data(content_media=media_items, album_bucket=None)
-    await state.set_state(PostWizard.preview)
+    out: List[Dict[str, Any]] = [{"type": "album", "payload": {"items": items}}] if items else []
+    if last_text:
+        out.append({"type": "text", "payload": {"text": last_text}})
+    return out
 
 
 # ---------- handlers ----------
@@ -131,40 +99,29 @@ async def cmd_post(message: Message, state: FSMContext):
         kind=None,
         target=None,
         schedule={"mode": None, "at": None},
-        album_bucket=None,
     )
     await state.set_state(PostWizard.collecting)
     await message.answer(
-        "Пришли контент ОДНИМ сообщением: текст (HTML) или медиа (фото/видео/док) — либо альбом (несколько файлов). "
-        f"Сразу покажу предпросмотр с кнопками. Лимит подписи к медиа: <b>{CAPTION_LIMIT}</b> символов."
+        "Пришли контент ОДНИМ сообщением: текст (HTML), одиночное медиа или альбом (группа медиа).\n"
+        f"Если можно — покажу превью одним сообщением с кнопкой. Если нет — альбом, затем текст с кнопкой.\n"
+        f"Лимит подписи у медиа: <b>{CAPTION_LIMIT}</b> символов."
     )
 
 
 @router.message(PostWizard.collecting, ~F.text.regexp(r"^/"))
-async def on_content_any(message: Message, state: FSMContext):
-    if message.media_group_id:
-        data = await state.get_data()
-        bucket = (data or {}).get("album_bucket")
-        if not bucket or bucket.get("id") != message.media_group_id:
-            bucket = {"id": message.media_group_id, "items": []}
-        _append_album_piece(bucket, message)
-        await state.update_data(album_bucket=bucket)
-        asyncio.create_task(_finalize_album_preview(message, state, message.media_group_id))
-        return
-
-    collected = _collected_from_single_message(message)
-    media_items = make_media_items(collected)
+async def on_content(message: Message, state: FSMContext, album: Optional[List[Message]] = None):
+    """
+    Единая точка: либо одиночное сообщение, либо уже собранный альбом (список Message) из AlbumsMiddleware.
+    """
+    media_items = _from_album(album) if album else _from_single_message(message)
 
     if not media_items:
-        await message.answer("Не понял формат. Пришли текст или медиа (photo/video/document).")
+        await message.answer("Не понял формат. Пришли текст, медиа или альбом группой.")
         return
 
     ok, _, code, err = await send_preview(message.bot, message.chat.id, media_items, kb=kb_preview())
     if not ok:
-        if code == "CaptionTooLong":
-            await message.answer(f"❌ Подпись длиннее {CAPTION_LIMIT} символов. Сократи текст и пришли заново.")
-        else:
-            await message.answer(f"❌ Превью не отправилось: {code or 'Unknown'} — {err or ''}")
+        await message.answer(f"❌ Превью не отправилось: {code or 'Unknown'} — {err or ''}")
         return
 
     await state.update_data(content_media=media_items)
@@ -172,23 +129,23 @@ async def on_content_any(message: Message, state: FSMContext):
 
 
 @router.message(PostWizard.preview, ~F.text.regexp(r"^/"))
-async def on_content_replace(message: Message, state: FSMContext):
+async def on_content_replace(message: Message, state: FSMContext, album: Optional[List[Message]] = None):
+    """Замена контента на этапе превью — повторяем сбор и превью."""
     await state.set_state(PostWizard.collecting)
-    await on_content_any(message, state)
+    await on_content(message, state, album=album)
 
 
 @router.callback_query(PostWizard.preview, F.data == "post:preview_edit")
 async def preview_edit(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
-    await _safe_clear_kb(cb)
-    await state.update_data(content_media=None, album_bucket=None)
+    await state.update_data(content_media=None)
     await state.set_state(PostWizard.collecting)
-    await cb.message.answer("Ок, пришли новый контент: текст/медиа или альбом.")
+    await cb.message.answer("Ок, пришли новый контент одним сообщением (текст/медиа/альбом).")
 
 
 @router.callback_query(PostWizard.preview, F.data == "post:preview_ok")
 async def preview_ok(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
-    await _safe_clear_kb(cb)
+    await cb.message.edit_reply_markup(reply_markup=None)
     await state.set_state(PostWizard.title_wait)
     await cb.message.answer("Введи <b>название рассылки</b> (коротко).")

@@ -1,19 +1,14 @@
 # Mailing/services/broadcasts/sender/__init__.py
-# Тонкий __init__: только публичный API и реэкспорты. Вся логика — в facade.py.
+# commit: refactor(sender/__init__): удалить send_content_json и мёртвые реэкспорты; оставить публичный API
 
 from .facade import (
     send_preview,
-    send_content_json,
-    send_media,
-    send_html,
+    send_actual,
 )
-
 from .policy import CAPTION_LIMIT
 
 __all__ = [
     "send_preview",
-    "send_content_json",
-    "send_media",
-    "send_html",
+    "send_actual",
     "CAPTION_LIMIT",
 ]
