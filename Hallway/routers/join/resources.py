@@ -5,29 +5,34 @@ import os
 import logging
 
 from aiogram import Router, F
+from aiogram.enums import ChatType
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    Message,
 )
-from aiogram.exceptions import TelegramBadRequest
 
 from common.utils import get_bot
 from storage import get_all_invite_links
 from config import PRIVATE_DESTINATIONS, LOG_CHANNEL_ID
 from Hallway.services.invite_service import generate_invite_links
-import messages  # тексты выносим сюда
 
 router = Router()
 
 
-async def send_chunked_message(chat_id: int, text: str, **kwargs):
+async def send_chunked_message(chat_id: int, text: str, *, allow_group: bool = False, **kwargs):
+    """
+    По умолчанию не отправляем в группы/каналы (chat_id < 0).
+    Для лог-канала/групп — передай allow_group=True явно.
+    """
     func_name = "send_chunked_message"
     bot = get_bot()
-    # Подмешиваем кнопку «Меню» в самый низ inline-клавиатуры, если она есть (ресурсы остаются как есть)
+
+    if chat_id < 0 and not allow_group:
+        logging.info(f"[guard] skip send to group/channel chat_id={chat_id}")
+        return
+
+    # Подмешиваем кнопку «Меню» в самый низ inline-клавиатуры, если она есть
     try:
         reply_markup = kwargs.get("reply_markup")
         if isinstance(reply_markup, InlineKeyboardMarkup):
@@ -61,7 +66,6 @@ async def send_chunked_message(chat_id: int, text: str, **kwargs):
                     extra={"user_id": chat_id}
                 )
                 break
-
 
 async def read_advertisement_file(file_name):
     func_name = "read_advertisement_file"
@@ -210,7 +214,7 @@ async def send_resources_message(bot, user, uid, refresh=False, previous_message
         )
         raise
 
-@router.callback_query(F.data.startswith("refresh_"))
+@router.callback_query(F.message.chat.type == ChatType.PRIVATE, F.data.startswith("refresh_"))
 async def on_refresh(query: CallbackQuery):
     func_name = "on_refresh"
     uid = query.from_user.id

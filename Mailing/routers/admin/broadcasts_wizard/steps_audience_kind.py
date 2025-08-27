@@ -1,5 +1,5 @@
 # Mailing/routers/admin/broadcasts_wizard/steps_audience_kind.py
-# Коммит: feat(wizard/text): Шаги «Тип» и «Аудитория» — понятные подсказки, примеры, аккуратные ошибки
+# Коммит: fix(wizard/audience): target(type='kind', kind=<selected>) вместо несуществующего 'all' — чинит 422 на превью
 from __future__ import annotations
 
 from html import escape as _html_escape
@@ -64,19 +64,27 @@ async def back_kind(cb: CallbackQuery, state: FSMContext):
     )
 
 
-# ---------- Аудитория: ALL ----------
+# ---------- Аудитория: KIND (все подписчики выбранного типа) ----------
 @router.callback_query(PostWizard.choose_audience, F.data == "aud:all")
 async def aud_all(cb: CallbackQuery, state: FSMContext):
     """
-    Все подписчики выбранного типа (резолвится по kind внутри сервиса).
+    Все подписчики выбранного типа.
+    ВАЖНО: backend (см. /audiences/preview и put_target) поддерживает type ∈ {ids, sql, kind}.
+    Поэтому здесь формируем target с type='kind' и конкретным kind.
     """
     await cb.answer()
-    target = {"type": "all"}
+    data = await state.get_data()
+    kind = (data.get("kind") or "news").strip()
+
+    # ← ключевая правка: используем type='kind'
+    target = {"type": "kind", "kind": kind}
     await state.update_data(target=target)
+
+    # Предпросмотр (чтобы словить возможные проблемы сразу)
     prev = await audience_preview_text(target)
     await state.set_state(PostWizard.choose_schedule)
     await cb.message.edit_text(
-        f"🎯 Аудитория: <b>все подписчики выбранного типа</b>\n{prev}\n\nТеперь выбери режим отправки:",
+        f"🎯 Аудитория: <b>все подписчики типа «{kind}»</b>\n{prev}\n\nТеперь выбери режим отправки:",
         reply_markup=kb_schedule(),
         disable_web_page_preview=True,
     )

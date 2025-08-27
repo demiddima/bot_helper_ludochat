@@ -13,7 +13,7 @@ from storage import ensure_user_subscriptions_defaults  # ← гарантиру
 router = Router(name="common")
 
 
-@router.message(Command("update_links"))
+@router.message(Command("update_links"), F.chat.type == "private")
 async def update_links(message: Message):
     """
     Обновляет инвайт-ссылки (refresh=True) и предварительно гарантирует,

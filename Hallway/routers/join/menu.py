@@ -1,9 +1,8 @@
-# handlers/join/menu.py
-# Меню и управление рассылками (актуальная версия)
-# Корп. логи: – user_id=… – описание (имя функции логгер сам подставит)
+# commit: fix(menu): все message/callback только в private
 
 import logging
 from aiogram import Router, F
+from aiogram.enums import ChatType
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -20,6 +19,10 @@ from storage import (
 )
 
 router = Router(name="menu")
+
+# ⚠️ Весь роутер работает ТОЛЬКО в личке
+router.message.filter(F.chat.type == ChatType.PRIVATE)
+router.callback_query.filter(F.message.chat.type == ChatType.PRIVATE)
 
 
 def _kb_label(name: str, state: bool) -> str:
@@ -75,7 +78,7 @@ async def on_menu_open(query: CallbackQuery):
         )
         await query.bot.send_message(
             chat_id=uid,
-            text=messages.get_menu_title_text(),  # "<b>Доступные разделы:</b>"
+            text=messages.get_menu_title_text(),
             reply_markup=kb,
         )
     except Exception as e:
@@ -86,7 +89,6 @@ async def on_menu_open(query: CallbackQuery):
 async def on_menu_subscriptions_message(msg: Message):
     """
     Раздел «Рассылки»: берём состояние из БД; если записи нет — создаём дефолты.
-    Никаких приписок «Этап 1…» — выводим только messages.get_subscriptions_text(...).
     """
     uid = msg.from_user.id
     try:
@@ -114,7 +116,6 @@ async def on_menu_subscriptions_message(msg: Message):
 async def on_subs_open_cb(query: CallbackQuery):
     """
     Нажатие inline-кнопки «Настроить рассылки» внутри любого сообщения.
-    Открываем «📣 Рассылки» так же, как из меню.
     """
     uid = query.from_user.id
     try:

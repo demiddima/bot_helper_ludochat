@@ -24,7 +24,7 @@ from Hallway.services.subscriptions import ensure_user_subscriptions_defaults
 
 router = Router()
 
-@router.message(F.text.startswith("/start"))
+@router.message(F.chat.type == "private", F.text.startswith("/start"))
 async def process_start(message: Message):
     bot = get_bot()
     uid = message.from_user.id
