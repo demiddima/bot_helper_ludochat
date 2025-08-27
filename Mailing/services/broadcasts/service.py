@@ -1,6 +1,3 @@
-# Mailing/services/broadcasts/service.py
-# commit: fix(report): строгий формат для /deliveries/report — без None, attempt_inc=1, sent_at=ISO-8601
-
 from __future__ import annotations
 
 import asyncio
@@ -11,11 +8,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import config
 from aiogram import Bot
 
-from common.db_api import db_api_client
-from Mailing.services.audience import resolve_audience  # резолв аудитории (ids|kind|sql)
+from common.db_api_client import db_api_client
 from common.utils.common import log_and_report
 from common.utils.time_msk import now_msk_naive
 
+from Mailing.services.audience import resolve_audience  # резолв аудитории (ids|kind|sql)
 from .sender import send_actual
 
 log = logging.getLogger(__name__)
@@ -301,10 +298,6 @@ async def send_broadcast(bot: Bot, broadcast: dict, throttle_per_sec: Optional[i
 async def mark_broadcast_sent(broadcast_id: int) -> dict:
     log.info("Помечаем рассылку id=%s как доставленную", broadcast_id)
     return await db_api_client.update_broadcast(broadcast_id, status="sent")
-
-
-# --- Немедленная попытка отправки конкретной рассылки ---
-from .worker import _parse_dt_msk, _now_msk  # совместимость
 
 
 async def try_send_now(bot: Bot, broadcast_id: int) -> None:
