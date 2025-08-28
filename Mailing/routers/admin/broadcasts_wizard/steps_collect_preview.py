@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from aiogram import Router, F
 from aiogram.filters import Command
@@ -11,7 +11,8 @@ from aiogram.fsm.context import FSMContext
 
 from . import PostWizard
 from Mailing.keyboards.broadcasts_wizard import kb_preview
-from Mailing.services.broadcasts.sender import send_actual, CAPTION_LIMIT
+# ВАЖНО: для превью используем send_preview (он сам умеет слать отдельное сообщение с кнопками при необходимости)
+from Mailing.services.broadcasts.sender import send_preview, CAPTION_LIMIT
 from common.middlewares.albums import AlbumsMiddleware
 
 log = logging.getLogger(__name__)
@@ -62,11 +63,6 @@ def _from_album(messages: List[Message]) -> List[Dict[str, Any]]:
         return []
     return [{"type": "album", "payload": {"items": album_items}}]
 
-def _can_attach_kb(items: List[Dict[str, Any]]) -> bool:
-    if not items or len(items) != 1:
-        return False
-    return (items[0].get("type") or "").lower() in {"text", "media"}
-
 
 # ---------- handlers ----------
 
@@ -96,16 +92,13 @@ async def on_content(message: Message, state: FSMContext, album: Optional[List[M
         await message.answer("Я не распознал сообщение. Пришли текст, одно медиа или альбом (группой).")
         return
 
-    attach_kb = _can_attach_kb(media_items)
-    kb = kb_preview() if attach_kb else None
+    # В превью: если можно — к самому сообщению; если нельзя — фасад сам вышлет отдельное сообщение с кнопками.
+    kb = kb_preview()
 
-    ok, _, code, err = await send_actual(message.bot, message.chat.id, media_items, kb_for_text=kb)
+    ok, _, code, err = await send_preview(message.bot, message.chat.id, media_items, kb=kb)
     if not ok:
         await message.answer(f"❌ Не удалось показать предпросмотр: {code or 'Unknown'} — {err or ''}")
         return
-
-    if not attach_kb:
-        await message.answer("\u2063", reply_markup=kb_preview())  # кнопки для альбома
 
     await state.update_data(content_media=media_items)
     await state.set_state(PostWizard.preview)
@@ -113,7 +106,6 @@ async def on_content(message: Message, state: FSMContext, album: Optional[List[M
 
 # ----- callbacks -----
 
-# Исправить
 @router.callback_query(PostWizard.preview, F.data.in_({"post:preview_edit", "post:edit", "post:fix"}))
 async def cb_preview_edit(cb: CallbackQuery, state: FSMContext):
     await cb.answer("Исправляем")
@@ -128,7 +120,6 @@ async def cb_preview_edit(cb: CallbackQuery, state: FSMContext):
         "Пришли заново: текст (HTML), медиа или альбом. Напомню: альбом — до 10 файлов; подпись будет у первого элемента."
     )
 
-# Дальше/ОК → просим НАЗВАНИЕ и ставим title_wait (так устроен визард)
 @router.callback_query(PostWizard.preview, F.data.in_({"post:preview_ok", "post:ok", "post:next", "post:continue"}))
 async def cb_preview_ok(cb: CallbackQuery, state: FSMContext):
     await cb.answer("Ок")
@@ -136,10 +127,9 @@ async def cb_preview_ok(cb: CallbackQuery, state: FSMContext):
         await cb.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
-    await state.set_state(PostWizard.title_wait)
+    await state.set_state(PostWizard.title_wait)  # следующий реальный стейт из рабочего архива
     await cb.message.answer("<b>Шаг 2. Название</b>\nПришли короткое название рассылки (видно только админам).")
 
-# Отмена
 @router.callback_query(F.data.in_({"cancel", "post:cancel", "wizard:cancel"}))
 async def cb_cancel(cb: CallbackQuery, state: FSMContext):
     await cb.answer("Отменено")

@@ -1,27 +1,33 @@
 # Mailing/services/broadcasts/sender/facade.py
 # Python 3.11+, aiogram v3
-# Изменения:
-# - Убраны зависимости от send_with_retry/policy/classify_exc (лишняя связка на этом уровне)
-# - Единый анализ media_items → text/single_media/album/mixed
-# - HTML-fallback (если нет entities, но строка похожа на HTML)
-# - Альбом: подпись и caption_entities только у первого элемента; в превью при отсутствии текста — техсообщение с kb
-# - Возврат: (ok, message_id | [message_ids], code, err)
+# Поведение:
+# - send_preview: как прежде (если kb нельзя прикрепить — отправляется отдельное сообщение с кнопками).
+# - send_actual: если kb_for_text не передали — пробуем подставить кнопку «Настроить рассылки».
+#   Кнопка крепится ТОЛЬКО когда это возможно (текст/одиночное медиа или текст после альбома).
+#   Если невозможно (чистый альбом без текста) — отправляем без кнопки, никаких дополнительных сообщений.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 import re
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
-from aiogram.types import InlineKeyboardMarkup, Message, MessageEntity
+from aiogram.types import (
+    InlineKeyboardMarkup,
+    Message,
+    MessageEntity,
+)
 
+from Mailing.keyboards.subscriptions import subscriptions_kb
 from .transport import send_text, send_single_media, send_album
 
 _HTML_RE = re.compile(r"<[^>]+>")
 
+
 def _looks_like_html(s: Optional[str]) -> bool:
     return bool(s) and bool(_HTML_RE.search(s))
+
 
 def _as_entities(seq: Optional[Sequence[Any]]) -> Optional[List[MessageEntity]]:
     if not seq:
@@ -32,15 +38,19 @@ def _as_entities(seq: Optional[Sequence[Any]]) -> Optional[List[MessageEntity]]:
     return out
 
 
+async def _default_manage_kb(bot: Bot) -> InlineKeyboardMarkup:
+   return subscriptions_kb()
+
+
 # ---------- analyze input structure ----------
 
 def _analyze(media: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
-    Нормализуем вход (поддерживаем несколько historical-форматов):
+    Поддерживаем форматы:
     - {"type":"text","payload":{"text": "...", "entities":[...]?}}
-    - {"type":"media","payload":{"kind":"photo|video|document","file_id": "...","caption":"...","caption_entities":[...]?}}
-    - {"type":"photo|video|document","payload":{"file_id": "...","caption":"...","caption_entities":[...]?}}  # legacy
-    - {"type":"album","payload":{"items":[ ... up to 10 ... ]}}
+    - {"type":"media","payload":{"kind":"photo|video|document","file_id":"...","caption":"...","caption_entities":[...]?}}
+    - {"type":"photo|video|document","payload":{...}}          # legacy → приводим к "media"
+    - {"type":"album","payload":{"items":[...]}}
     """
     model: Dict[str, Any] = {"kind": "mixed", "items": media or []}
     if not media:
@@ -48,7 +58,6 @@ def _analyze(media: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     first = media[0] or {}
 
-    # album
     if first.get("type") == "album":
         items = (first.get("payload") or {}).get("items") or []
         model["kind"] = "album"
@@ -63,7 +72,6 @@ def _analyze(media: List[Dict[str, Any]]) -> Dict[str, Any]:
         model["text_entities"] = ents
         return model
 
-    # single media (унификация legacy → media)
     if len(media) == 1:
         t = (first.get("type") or "").lower()
         if t in {"text", "html"}:
@@ -84,7 +92,7 @@ def _analyze(media: List[Dict[str, Any]]) -> Dict[str, Any]:
             model["media_payload"] = {"kind": t, **p}
             return model
 
-    # mixed: оставляем как есть
+    # mixed
     model["kind"] = "mixed"
     return model
 
@@ -99,7 +107,19 @@ def _err(e: Exception) -> Tuple[bool, None, str, str]:
     return False, None, "Unknown", str(e)
 
 
-# ---------- public API ----------
+async def _send_text_with_auto_html(
+    bot: Bot,
+    chat_id: int,
+    text: str,
+    kb: Optional[InlineKeyboardMarkup],
+    entities: Optional[Sequence[Any]] = None,
+) -> Message:
+    ents = _as_entities(entities)
+    parse_html = (ents is None) and _looks_like_html(text)
+    return await send_text(bot, chat_id, text, entities=ents, parse_html=parse_html, reply_markup=kb)
+
+
+# ---------- PREVIEW (как было: с fallback отдельным сообщением для кнопок) ----------
 
 async def send_preview(
     bot: Bot,
@@ -107,95 +127,69 @@ async def send_preview(
     media: List[Dict[str, Any]],
     kb: Optional[InlineKeyboardMarkup] = None,
 ) -> Tuple[bool, Optional[Union[int, List[int]]], Optional[str], Optional[str]]:
-    """
-    Превью максимально совпадает с боевой логикой, но:
-    - если альбом без текста, а нужна клавиатура — шлём дополнительное техсообщение с kb.
-    """
     try:
         model = _analyze(media)
 
         if model["kind"] == "text":
-            text = model.get("text_html") or ""
-            ents = model.get("text_entities")
-            # если entities нет, но это HTML — включаем parse_html
-            parse_html = (ents is None) and _looks_like_html(text)
-            msg: Message = await send_text(bot, chat_id, text, entities=ents, parse_html=parse_html, reply_markup=kb)
+            msg = await _send_text_with_auto_html(bot, chat_id, model.get("text_html") or "", kb, model.get("text_entities"))
             return True, msg.message_id, None, None
 
         if model["kind"] == "single_media":
             payload = model.get("media_payload") or {}
             kind = (model.get("media_kind") or "document").lower()
             caption = (payload.get("caption") or None)
-            caption_entities = _as_entities(payload.get("caption_entities"))
-            parse_caption_html = (caption_entities is None) and _looks_like_html(caption)
-            msg: Message = await send_single_media(
-                bot, chat_id, kind, payload,
-                parse_caption_html=parse_caption_html,
-                reply_markup=kb
-            )
+            cap_ents = _as_entities(payload.get("caption_entities"))
+            parse_caption_html = (cap_ents is None) and _looks_like_html(caption)
+            msg = await send_single_media(bot, chat_id, kind, payload, parse_caption_html=parse_caption_html, reply_markup=kb)
             return True, msg.message_id, None, None
 
         if model["kind"] == "album":
-            # 1) Шлём альбом (подпись и caption_entities — у первого)
             msgs = await send_album(bot, chat_id, model.get("album_items") or [])
             ids = [m.message_id for m in (msgs or [])]
 
-            # 2) Если есть текст — шлём текст с kb
             text = model.get("text_html") or ""
             ents = model.get("text_entities")
             if text:
-                parse_html = (ents is None) and _looks_like_html(text)
-                msg = await send_text(bot, chat_id, text, entities=ents, parse_html=parse_html, reply_markup=kb)
+                msg = await _send_text_with_auto_html(bot, chat_id, text, kb, ents)
                 if msg:
                     ids.append(msg.message_id)
-                return True, ids or None, None, None
-
-            # 3) Текста нет, но нужно показать kb — добавим техсообщение в превью
-            if kb:
-                msg = await send_text(bot, chat_id, "Кнопки к альбому:", entities=None, parse_html=False, reply_markup=kb)
+            elif kb:
+                # Кнопку к альбому не прикрепить — fallback: отдельное пустое сообщение с клавиатурой
+                msg = await send_text(bot, chat_id, "\u2063", parse_html=False, entities=None, reply_markup=kb)
                 if msg:
                     ids.append(msg.message_id)
-
             return True, ids or None, None, None
 
-        # mixed: шлём по одному; kb — на последний элемент
+        # mixed: клава — на последний поддерживающий элемент; если некуда — отправим отдельное сообщение
         last_id: Optional[int] = None
-        items = media or []
-        for idx, el in enumerate(items):
-            is_last = idx == len(items) - 1
+        last_supports_kb = False
+        for idx, el in enumerate(media or []):
+            is_last = idx == len(media) - 1
             t = (el.get("type") or "").lower()
             p = (el.get("payload") or {})
 
             if t in {"text", "html"}:
-                text = (p.get("text") or "").strip()
-                ents = _as_entities(p.get("entities"))
-                parse_html = (ents is None) and _looks_like_html(text)
-                msg = await send_text(bot, chat_id, text, entities=ents, parse_html=parse_html, reply_markup=kb if is_last else None)
+                msg = await _send_text_with_auto_html(bot, chat_id, (p.get("text") or "").strip(), kb if is_last else None, _as_entities(p.get("entities")))
+                last_supports_kb = True
             elif t == "media":
                 kind = (p.get("kind") or "document").lower()
-                caption = (p.get("caption") or None)
+                cap = (p.get("caption") or None)
                 cap_ents = _as_entities(p.get("caption_entities"))
-                parse_caption_html = (cap_ents is None) and _looks_like_html(caption)
+                parse_caption_html = (cap_ents is None) and _looks_like_html(cap)
                 msg = await send_single_media(bot, chat_id, kind, p, parse_caption_html=parse_caption_html, reply_markup=kb if is_last else None)
-            elif t in {"photo", "video", "document"}:
-                # приведение legacy к единому виду
-                kind = t
-                caption = (p.get("caption") or None)
-                cap_ents = _as_entities(p.get("caption_entities"))
-                parse_caption_html = (cap_ents is None) and _looks_like_html(caption)
-                msg = await send_single_media(bot, chat_id, kind, {"kind": kind, **p}, parse_caption_html=parse_caption_html, reply_markup=kb if is_last else None)
+                last_supports_kb = True
             elif t == "album":
-                # отправим альбом сразу; kb при необходимости добавится следующим шагом (текст/техсообщение)
-                msgs = await send_album(bot, chat_id, (p.get("items") or []))
-                if msgs:
-                    last_id = msgs[-1].message_id
-                continue
+                group = await send_album(bot, chat_id, (p.get("items") or []))
+                msg = group[-1] if group else None
+                last_supports_kb = False
             else:
-                # неизвестный тип — пропустим
-                continue
+                msg = None
 
             if msg:
                 last_id = msg.message_id
+
+        if kb and not last_supports_kb:
+            await send_text(bot, chat_id, "\u2063", parse_html=False, entities=None, reply_markup=kb)
 
         return True, last_id, None, None
 
@@ -205,6 +199,8 @@ async def send_preview(
         return _err(e)
 
 
+# ---------- ACTUAL (добавлена авто-кнопка «Настроить рассылки») ----------
+
 async def send_actual(
     bot: Bot,
     chat_id: int,
@@ -212,25 +208,27 @@ async def send_actual(
     kb_for_text: Optional[InlineKeyboardMarkup] = None,
 ) -> Tuple[bool, Optional[Union[int, List[int]]], Optional[str], Optional[str]]:
     """
-    Боевая отправка: если можно одним — одним; иначе альбом → текст (если есть).
+    Боевая отправка.
+    Если kb_for_text не передан — используем клавиатуру «Настроить рассылки» по умолчанию.
+    Кнопку прикрепляем ТОЛЬКО если это возможно. Никаких отдельных сообщений.
     """
     try:
+        # если клава не пришла — подставим дефолтную
+        kb = kb_for_text or await _default_manage_kb(bot)
+
         model = _analyze(media)
 
         if model["kind"] == "text":
-            text = model.get("text_html") or ""
-            ents = model.get("text_entities")
-            parse_html = (ents is None) and _looks_like_html(text)
-            msg = await send_text(bot, chat_id, text, entities=ents, parse_html=parse_html, reply_markup=kb_for_text)
+            msg = await _send_text_with_auto_html(bot, chat_id, model.get("text_html") or "", kb, model.get("text_entities"))
             return True, msg.message_id, None, None
 
         if model["kind"] == "single_media":
             payload = model.get("media_payload") or {}
             kind = (model.get("media_kind") or "document").lower()
             caption = (payload.get("caption") or None)
-            caption_entities = _as_entities(payload.get("caption_entities"))
-            parse_caption_html = (caption_entities is None) and _looks_like_html(caption)
-            msg = await send_single_media(bot, chat_id, kind, payload, parse_caption_html=parse_caption_html, reply_markup=kb_for_text)
+            cap_ents = _as_entities(payload.get("caption_entities"))
+            parse_caption_html = (cap_ents is None) and _looks_like_html(caption)
+            msg = await send_single_media(bot, chat_id, kind, payload, parse_caption_html=parse_caption_html, reply_markup=kb)
             return True, msg.message_id, None, None
 
         if model["kind"] == "album":
@@ -240,44 +238,36 @@ async def send_actual(
             text = model.get("text_html") or ""
             ents = model.get("text_entities")
             if text:
-                parse_html = (ents is None) and _looks_like_html(text)
-                msg = await send_text(bot, chat_id, text, entities=ents, parse_html=parse_html, reply_markup=kb_for_text)
+                msg = await _send_text_with_auto_html(bot, chat_id, text, kb, ents)
                 if msg:
                     ids.append(msg.message_id)
+            # нет текста → кнопке не к чему крепиться → ничего не добавляем
             return True, ids or None, None, None
 
-        # mixed
+        # mixed: клава — на последний поддерживающий элемент; если последний — альбом, ничего не добавляем
         last_id: Optional[int] = None
-        items = media or []
-        for idx, el in enumerate(items):
-            is_last = idx == len(items) - 1
+        last_supports_kb = False
+        for idx, el in enumerate(media or []):
+            is_last = idx == len(media) - 1
             t = (el.get("type") or "").lower()
             p = (el.get("payload") or {})
 
             if t in {"text", "html"}:
-                text = (p.get("text") or "").strip()
-                ents = _as_entities(p.get("entities"))
-                parse_html = (ents is None) and _looks_like_html(text)
-                msg = await send_text(bot, chat_id, text, entities=ents, parse_html=parse_html, reply_markup=kb_for_text if is_last else None)
+                msg = await _send_text_with_auto_html(bot, chat_id, (p.get("text") or "").strip(), kb if is_last else None, _as_entities(p.get("entities")))
+                last_supports_kb = True
             elif t == "media":
                 kind = (p.get("kind") or "document").lower()
-                caption = (p.get("caption") or None)
+                cap = (p.get("caption") or None)
                 cap_ents = _as_entities(p.get("caption_entities"))
-                parse_caption_html = (cap_ents is None) and _looks_like_html(caption)
-                msg = await send_single_media(bot, chat_id, kind, p, parse_caption_html=parse_caption_html, reply_markup=kb_for_text if is_last else None)
-            elif t in {"photo", "video", "document"}:
-                kind = t
-                caption = (p.get("caption") or None)
-                cap_ents = _as_entities(p.get("caption_entities"))
-                parse_caption_html = (cap_ents is None) and _looks_like_html(caption)
-                msg = await send_single_media(bot, chat_id, kind, {"kind": kind, **p}, parse_caption_html=parse_caption_html, reply_markup=kb_for_text if is_last else None)
+                parse_caption_html = (cap_ents is None) and _looks_like_html(cap)
+                msg = await send_single_media(bot, chat_id, kind, p, parse_caption_html=parse_caption_html, reply_markup=kb if is_last else None)
+                last_supports_kb = True
             elif t == "album":
-                msgs = await send_album(bot, chat_id, (p.get("items") or []))
-                if msgs:
-                    last_id = msgs[-1].message_id
-                continue
+                group = await send_album(bot, chat_id, (p.get("items") or []))
+                msg = group[-1] if group else None
+                last_supports_kb = False
             else:
-                continue
+                msg = None
 
             if msg:
                 last_id = msg.message_id
