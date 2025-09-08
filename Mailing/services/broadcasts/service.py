@@ -1,9 +1,11 @@
+# Mailing/services/broadcasts/service.py
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Set
 
 import config
 from aiogram import Bot
@@ -13,6 +15,7 @@ from common.utils.common import log_and_report
 from common.utils.time_msk import now_msk_naive
 
 from Mailing.services.audience import resolve_audience  # резолв аудитории (ids|kind|sql)
+from storage import remove_membership  # <- добавили обёртку для membership
 from .sender import send_actual
 
 log = logging.getLogger(__name__)
@@ -208,25 +211,73 @@ async def _try_report(broadcast_id: int, items: List[Dict[str, Any]]) -> None:
         log.warning("report %s: ошибка отправки репорта: %s", broadcast_id, e)
 
 
+# ---- AUTO-CLEANUP FOR BLOCKED USERS ----
+
+def _is_blocked_error(err_code: Optional[str], err_msg: Optional[str]) -> bool:
+    """
+    Эвристика определения блокировки бота пользователем.
+    Ориентируемся на текст Telegram API: 'Forbidden: bot was blocked by the user'.
+    """
+    s1 = (err_code or "").lower()
+    s2 = (err_msg or "").lower()
+    if "forbidden" in s1 and "blocked" in s1:
+        return True
+    return "bot was blocked by the user" in s2 or ("forbidden" in s2 and "blocked" in s2)
+
+
+async def _cleanup_after_block(user_id: int) -> None:
+    """
+    Удаляем: membership только по BOT_ID и запись в user_subscriptions.
+    Лог — одно INFO-сообщение.
+    """
+    # 1) membership (только бот)
+    try:
+        await remove_membership(user_id, config.BOT_ID)
+        m_ok = True
+    except Exception as exc:
+        m_ok = False
+        log.error("user_id=%s – Ошибка remove_membership(bot): %s", user_id, exc, extra={"user_id": user_id})
+
+    # 2) user_subscriptions
+    try:
+        await db_api_client.delete_user_subscriptions(user_id)
+        s_ok = True
+    except Exception as exc:
+        s_ok = False
+        log.error("user_id=%s – Ошибка delete_user_subscriptions: %s", user_id, exc, extra={"user_id": user_id})
+
+    # Единый INFO — что получилось
+    parts: List[str] = []
+    parts.append("membership(bot)=OK" if m_ok else "membership(bot)=ERR")
+    parts.append("subscriptions=OK" if s_ok else "subscriptions=ERR")
+    log.info(
+        "user_id=%s – Автоочистка после Forbidden: %s",
+        user_id, ", ".join(parts),
+        extra={"user_id": user_id}
+    )
+
+
 async def send_broadcast(bot: Bot, broadcast: dict, throttle_per_sec: Optional[int] = None) -> Tuple[int, int]:
     """
-    Основная отправка: читает broadcast['content'] (любой из поддерживаемых форматов),
-    берёт target, резолвит аудиторию и шлёт однотипно каждому.
+    Основная отправка: читает broadcast['content'], резолвит аудиторию и шлёт каждому.
     Возвращает (sent, failed).
+
+    Новое: если sent=0 и failed>0, но все ошибки — "bot was blocked by the user",
+    то пишем INFO и не зовём log_and_report (чтобы не спамить ошибками).
     """
     bid = broadcast["id"]
     rate = throttle_per_sec or getattr(config, "BROADCAST_RATE_PER_SEC", 29)
     rate = max(1, int(rate))
     window = 1.0 / rate
 
-    # 1. Контент
+    # 1) Контент
     raw_content = broadcast.get("content")
     media_items = _to_media_items(raw_content)
     if not media_items:
         log.error("Рассылка id=%s не отправлена: content пуст или не распознан", bid)
         return 0, 0
 
-    # 2. Аудитория
+    # 2) Аудитория
     try:
         target = await db_api_client.get_broadcast_target(bid)
     except Exception as e:
@@ -238,15 +289,18 @@ async def send_broadcast(bot: Bot, broadcast: dict, throttle_per_sec: Optional[i
         log.warning("Рассылка id=%s не отправлена: аудитория пустая", bid)
         return 0, 0
 
-    # 3. Материализуем pending
+    # 3) Материализуем pending
     await _try_materialize(bid, audience)
 
     log.info("Начинаю рассылку id=%s: аудитория=%s, скорость=%s msg/с", bid, len(audience), rate)
 
-    # 4. Цикл отправки + батч-репорт
+    # 4) Цикл отправки + батч-репорт
     sent = 0
     failed = 0
     report_buf: List[Dict[str, Any]] = []
+
+    cleaned_blocked: Set[int] = set()
+    blocked_failed_count = 0  # ← считаем, сколько фейлов — это именно 'bot was blocked by the user'
 
     for uid in audience:
         ok, msg_id, err_code, err_msg = await send_actual(bot, uid, media_items, kb_for_text=None)
@@ -256,7 +310,6 @@ async def send_broadcast(bot: Bot, broadcast: dict, throttle_per_sec: Optional[i
                 "user_id": uid,
                 "status": "sent",
                 "message_id": msg_id,
-                # далее _try_report соберёт ISO-8601 и attempt_inc сам
             })
             log.debug("Сообщение отправлено пользователю %s (broadcast=%s)", uid, bid)
         else:
@@ -268,6 +321,13 @@ async def send_broadcast(bot: Bot, broadcast: dict, throttle_per_sec: Optional[i
                 "error_code": err_code,
                 "error_message": (err_msg[:1000] if err_msg else None),
             })
+
+            # Автоочистка на Forbidden (bot blocked)
+            if uid not in cleaned_blocked and _is_blocked_error(err_code, err_msg):
+                await _cleanup_after_block(uid)
+                cleaned_blocked.add(uid)
+                blocked_failed_count += 1
+
             log.debug("Ошибка при отправке пользователю %s (broadcast=%s): %s", uid, bid, err_code or "Unknown")
 
         if len(report_buf) >= REPORT_BATCH:
@@ -280,13 +340,21 @@ async def send_broadcast(bot: Bot, broadcast: dict, throttle_per_sec: Optional[i
     if report_buf:
         await _try_report(bid, report_buf)
 
-    # 5. Итог
+    # 5) Итог — без шума, если все ошибки = blocked
     if sent == 0 and failed > 0:
-        log.error("Рассылка id=%s не доставлена никому (ошибок=%s)", bid, failed)
-        try:
-            await log_and_report(Exception("broadcast failed"), f"Рассылка {bid} не доставлена: ошибок={failed}")
-        except Exception:
-            pass
+        if blocked_failed_count == failed:
+            # Все получатели заблокировали бота: считаем кейс штатным, без ошибок
+            log.info(
+                "Рассылка id=%s: аудитория недоступна (все адресаты заблокировали бота). "
+                "Ошибок не создаём, автоочистка выполнена.", bid
+            )
+        else:
+            # Реальный фейл: ни одного отправленного, и не все причины = blocked
+            log.error("Рассылка id=%s не доставлена никому (ошибок=%s)", bid, failed)
+            try:
+                await log_and_report(Exception("broadcast failed"), f"Рассылка {bid} не доставлена: ошибок={failed}")
+            except Exception:
+                pass
     elif failed > 0:
         log.warning("Рассылка id=%s доставлена частично: отправлено=%s, ошибок=%s", bid, sent, failed)
     else:

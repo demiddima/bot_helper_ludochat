@@ -1,5 +1,6 @@
-# handlers/join/membership.py
+# Hallway/routers/join/membership.py
 # Логи без названий функций, только смысл действий. Добавлена обработка приватных чатов.
+# Единый INFO при автоочистке на left/kicked. Восстанавливаем дефолтные подписки при member.
 
 import asyncio
 import logging
@@ -10,8 +11,16 @@ from httpx import HTTPStatusError
 
 from common.utils import cleanup_join_requests, log_and_report, get_bot
 from common.utils.time_msk import now_msk_naive
-from storage import upsert_chat, add_user, add_membership, remove_membership
-from common.db_api_client import db_api_client
+from storage import (
+    upsert_chat,
+    add_user,
+    add_membership,
+    remove_membership,
+    ensure_user_subscriptions_defaults,
+    # новая обёртка
+    delete_user_subscriptions,
+)
+from common.db_api_client import db_api_client  # остаётся для get_chats()
 import config
 
 router = Router()
@@ -125,35 +134,50 @@ async def on_my_chat_member(update: ChatMemberUpdated):
     if chat.type == "private":
         user_id = chat.id
         if status in ("member", "creator", "administrator"):
+            # подписываем на бота и восстанавливаем дефолтные подписки
             try:
                 await add_membership(user_id, config.BOT_ID)
-                logging.info(f"user_id={user_id} – Подписался на бота", extra={"user_id": user_id})
+                await ensure_user_subscriptions_defaults(user_id)
+                logging.info(
+                    f"user_id={user_id} – Подписался на бота; дефолтные подписки восстановлены",
+                    extra={"user_id": user_id}
+                )
             except Exception as exc:
-                logging.error(f"user_id={user_id} – Ошибка подписки на бота: {exc}", extra={"user_id": user_id})
-                await log_and_report(exc, f"add_membership bot user={user_id}")
+                logging.error(f"user_id={user_id} – Ошибка подписки/восстановления дефолтов: {exc}", extra={"user_id": user_id})
+                await log_and_report(exc, f"add_membership+ensure_defaults bot user={user_id}")
         elif status in ("left", "kicked"):
-            # 1) снимаем membership в БД
+            # единый INFO-лог после двух шагов
+            m_ok = True
+            s_ok = True
             try:
                 await remove_membership(user_id, config.BOT_ID)
-                logging.info(f"user_id={user_id} – Отписался от бота", extra={"user_id": user_id})
             except Exception as exc:
+                m_ok = False
                 logging.error(f"user_id={user_id} – Ошибка отписки от бота: {exc}", extra={"user_id": user_id})
                 await log_and_report(exc, f"remove_membership bot user={user_id}")
 
-            # 2) удаляем запись user_subscriptions
             try:
-                await db_api_client.delete_user_subscriptions(user_id)
-                logging.info(f"user_id={user_id} – Подписки удалены (user_subscriptions)", extra={"user_id": user_id})
+                await delete_user_subscriptions(user_id)
             except HTTPStatusError as exc:
-                # например, если записи уже нет — пусть будет warning
+                # например, если записи уже нет — warning, но INFO будет единый
+                s_ok = False
                 logging.warning(
                     f"user_id={user_id} – HTTP {exc.response.status_code} при удалении подписок",
                     extra={"user_id": user_id}
                 )
                 await log_and_report(exc, f"DELETE /subscriptions/{user_id}")
             except Exception as exc:
+                s_ok = False
                 logging.error(f"user_id={user_id} – Ошибка удаления подписок: {exc}", extra={"user_id": user_id})
                 await log_and_report(exc, f"DELETE /subscriptions/{user_id}")
+
+            parts = []
+            parts.append("membership(bot)=OK" if m_ok else "membership(bot)=ERR")
+            parts.append("subscriptions=OK" if s_ok else "subscriptions=ERR")
+            logging.info(
+                f"user_id={user_id} – Автоочистка после отписки: {', '.join(parts)}",
+                extra={"user_id": user_id}
+            )
         return
 
     # группы/каналы – статус бота

@@ -188,3 +188,9 @@ async def toggle_user_subscription(user_id: int, kind: str) -> dict:
             log.info(f"[{func}] – user_id={user_id} – kind={kind} – OK(after create)", extra={"user_id": user_id})
             return data2
         raise
+
+
+# Новая: удаление подписок пользователя (используется при блокировке бота)
+@retry(**RETRY)
+async def delete_user_subscriptions(user_id: int) -> None:
+    await db_api_client.delete_user_subscriptions(user_id)

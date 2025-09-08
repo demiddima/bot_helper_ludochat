@@ -13,7 +13,7 @@ from common.utils import get_bot
 from storage import get_all_invite_links
 from config import PRIVATE_DESTINATIONS, LOG_CHANNEL_ID
 from Hallway.services.invite_service import generate_invite_links
-from utils.chatlink import is_url, to_int_or_none, eq_chat_id
+from common.utils.chatlink import is_url, to_int_or_none, eq_chat_id
 
 router = Router()
 

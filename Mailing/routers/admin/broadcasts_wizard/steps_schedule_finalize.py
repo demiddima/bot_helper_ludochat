@@ -1,5 +1,6 @@
 # Mailing/routers/admin/broadcasts_wizard/steps_schedule_finalize.py
-# Коммит: feat(wizard/text): уточнённые подсказки по CRON/разовой дате, дружелюбные ошибки, ясные итоги; без изменения логики
+# Полная версия с безопасными отправками
+
 from __future__ import annotations
 
 import logging
@@ -14,7 +15,8 @@ from Mailing.keyboards.broadcasts_wizard import kb_schedule, kb_schedule_confirm
 from Mailing.services.schedule import parse_and_preview, format_preview, ScheduleError
 from common.db_api_client import db_api_client
 from Mailing.services.broadcasts.service import try_send_now  # «Отправить сейчас» остаётся
-from Mailing.services.local_scheduler import schedule_after_create  # ⬅️ добавлено
+from Mailing.services.local_scheduler import schedule_after_create  # план ближайшего запуска
+from common.utils.tg_safe import answer_safe, edit_text_safe  # ← добавлено
 
 log = logging.getLogger(__name__)
 router = Router(name="admin_broadcasts_wizard.schedule_finalize")
@@ -140,7 +142,7 @@ async def _create_broadcast_compat(*, kind: str, title: str, content_csv: Dict[s
                                    status: str, schedule: Optional[str] = None,
                                    enabled: Optional[bool] = None) -> Dict[str, Any]:
     """
-    Совместимый вызов: сперва пытаемся kwargs-вариант, при TypeError/AttributeError — payload-вариант.
+    Совместимый вызов: сперва kwargs-вариант, при TypeError/AttributeError — payload-вариант.
     """
     try:
         return await db_api_client.create_broadcast(
@@ -178,7 +180,6 @@ async def _put_target_compat(bid: int, target: Dict[str, Any]) -> None:
     try:
         await db_api_client.update_broadcast_target(bid, target=target)
     except AttributeError:
-        # если ни один метод не найден — логируем, но не валим визард
         log.warning("Не найден метод записи таргета для broadcast_id=%s", bid)
 
 
@@ -201,7 +202,7 @@ async def sch_now(cb: CallbackQuery, state: FSMContext):
     target = _pull(["target", "audience", "audience_target"], data, draft)
 
     if not media_items or not title or not kind or not target:
-        await cb.message.answer("Не хватает данных для рассылки. Начни заново: /post")
+        await answer_safe(cb, "Не хватает данных для рассылки. Начни заново: /post")
         await state.clear()
         return
 
@@ -211,11 +212,12 @@ async def sch_now(cb: CallbackQuery, state: FSMContext):
         await _put_target_compat(br["id"], target)
     except Exception as e:
         log.error("Не удалось создать рассылку: %s", e)
-        await cb.message.answer("❌ Не удалось создать рассылку. Проверь соединение с бэком.")
+        await answer_safe(cb, "❌ Не удалось создать рассылку. Проверь соединение с бэком.")
         return
 
     await try_send_now(cb.message.bot, br["id"])
-    await cb.message.answer(
+    await answer_safe(
+        cb,
         f"✅ Создано и отправляется: <b>#{br['id']}</b>\n"
         f"Если нужно, вернись и поправь расписание в менеджере рассылок."
     )
@@ -228,7 +230,8 @@ async def sch_mode_cron(cb: CallbackQuery, state: FSMContext):
     draft = await _get_draft(state)
     draft["__sch_mode"] = "cron"
     await _save_draft(state, draft)
-    await cb.message.edit_text(
+    await edit_text_safe(
+        cb,
         "<b>CRON-расписание</b> — 5 полей. Пары примеров:\n"
         "• <code>0 15 * * 1</code> — по понедельникам в 15:00\n"
         "• <code>0 10 * * 1,3,5</code> — Пн/Ср/Пт в 10:00\n"
@@ -245,7 +248,8 @@ async def sch_mode_oneoff(cb: CallbackQuery, state: FSMContext):
     draft = await _get_draft(state)
     draft["__sch_mode"] = "oneoff"
     await _save_draft(state, draft)
-    await cb.message.edit_text(
+    await edit_text_safe(
+        cb,
         "<b>Разовая отправка</b> — укажи дату и время в формате <b>ДД.ММ.ГГГГ HH:MM</b> (МСК).\n"
         "Можно без ведущих нулей: <code>7.9.2025 9:05</code>. Пример с нулями: <code>27.08.2025 15:00</code>.\n\n"
         "Пришли строку даты/времени — я проверю и покажу превью.",
@@ -268,7 +272,8 @@ async def sch_input(message: Message, state: FSMContext):
         kind, dates = parse_and_preview(schedule_text, count=5)
         preview = format_preview(kind, dates)
     except ScheduleError as e:
-        await message.answer(
+        await answer_safe(
+            message,
             f"❌ {e}\n\n"
             f"Исправь строку и пришли снова. Подсказка: для cron нужно 5 полей, для разовой даты — формат ДД.ММ.ГГГГ HH:MM (МСК)."
         )
@@ -280,7 +285,8 @@ async def sch_input(message: Message, state: FSMContext):
     draft.pop("__sch_mode", None)
     await _save_draft(state, draft)
 
-    await message.answer(
+    await answer_safe(
+        message,
         f"<b>Расписание сохранено</b>\n{preview}",
         reply_markup=kb_schedule_confirm(enabled=bool(draft.get("enabled", True))),
         disable_web_page_preview=True,
@@ -304,7 +310,8 @@ async def sch_toggle(cb: CallbackQuery, state: FSMContext):
     else:
         txt += "\nРасписание ещё не задано."
 
-    await cb.message.edit_text(
+    await edit_text_safe(
+        cb,
         txt,
         reply_markup=kb_schedule_confirm(enabled=bool(draft.get("enabled", True))),
         disable_web_page_preview=True,
@@ -314,7 +321,8 @@ async def sch_toggle(cb: CallbackQuery, state: FSMContext):
 
 @router.callback_query(PostWizard.choose_schedule, F.data == "sch:edit")
 async def sch_edit(cb: CallbackQuery, state: FSMContext):
-    await cb.message.edit_text(
+    await edit_text_safe(
+        cb,
         "<b>Шаг: Расписание</b>\nВыбери режим ввода:",
         reply_markup=kb_schedule(),
         disable_web_page_preview=True
@@ -342,7 +350,7 @@ async def sch_save(cb: CallbackQuery, state: FSMContext):
     enabled = bool(_pull(["enabled", "is_enabled"], draft, data, default=True))
 
     if not media_items or not title or not kind or not target or not schedule:
-        await cb.message.answer("Не хватает данных для рассылки. Начни заново: /post")
+        await answer_safe(cb, "Не хватает данных для рассылки. Начни заново: /post")
         await state.clear()
         return
 
@@ -350,7 +358,7 @@ async def sch_save(cb: CallbackQuery, state: FSMContext):
     try:
         parse_and_preview(schedule, count=1)
     except ScheduleError as e:
-        await cb.message.answer(f"Некорректное расписание: {e}")
+        await answer_safe(cb, f"Некорректное расписание: {e}")
         return
 
     # сборка контента в формат бэкенда
@@ -368,7 +376,7 @@ async def sch_save(cb: CallbackQuery, state: FSMContext):
         await _put_target_compat(br["id"], target)
     except Exception as e:
         log.error("Не удалось создать запланированную рассылку: %s", e)
-        await cb.message.answer("❌ Не удалось создать запланированную рассылку. Проверь соединение с бэком и корректность данных.")
+        await answer_safe(cb, "❌ Не удалось создать запланированную рассылку. Проверь соединение с бэком и корректность данных.")
         return
 
     # сразу ставим ближайшую задачу
@@ -377,7 +385,8 @@ async def sch_save(cb: CallbackQuery, state: FSMContext):
     except Exception as e:
         log.warning("Не удалось поставить ближайший запуск для #%s: %s", br.get("id"), e)
 
-    await cb.message.answer(
+    await answer_safe(
+        cb,
         f"💾 Создано: <b>#{br['id']}</b>\n"
         f"Статус: {'включена' if enabled else 'выключена'}\n"
         f"Расписание: <code>{schedule}</code>\n"

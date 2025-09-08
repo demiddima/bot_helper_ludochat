@@ -1,4 +1,4 @@
-# main.py — чистая версия под новую архитектуру (Hallway/Mailing), без handlers.*
+# main.py — чистая версия под новую архитектуру (Hallway/Mailing), с мягкой обработкой TelegramForbiddenError
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from typing import Any
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramForbiddenError  # ← добавлено
 
 import logger
 logger.configure_logging()
@@ -27,6 +28,7 @@ from Mailing.routers import router as mailing_router
 from common.utils import get_bot, shutdown_utils
 from common.utils.time_msk import now_msk_naive
 from common.db_api_client import db_api_client
+from common.utils.tg_safe import _cleanup_blocked  # ← добавлено
 
 # Хранилище
 from storage import upsert_chat, get_chats as storage_get_chats
@@ -78,14 +80,39 @@ def _chunk_text(text: str, limit: int = 4096):
         start = cut
 
 
+def _extract_user_id_from_update(update) -> int | None:
+    try:
+        # CallbackQuery
+        cb = getattr(update, "callback_query", None)
+        if cb and getattr(cb, "from_user", None):
+            return int(cb.from_user.id)
+    except Exception:
+        pass
+    try:
+        # Message
+        msg = getattr(update, "message", None)
+        if msg and getattr(msg, "chat", None):
+            return int(msg.chat.id)
+    except Exception:
+        pass
+    try:
+        # Edited message
+        em = getattr(update, "edited_message", None)
+        if em and getattr(em, "chat", None):
+            return int(em.chat.id)
+    except Exception:
+        pass
+    try:
+        # my_chat_member (приватка)
+        mcm = getattr(update, "my_chat_member", None)
+        if mcm and getattr(mcm, "chat", None) and mcm.chat.type == "private":
+            return int(mcm.chat.id)
+    except Exception:
+        pass
+    return None
+
+
 async def global_error_handler(*args: Any) -> bool:
-    """
-    Универсальный обработчик ошибок:
-    - Поддерживает сигнатуры (exception) и (update, exception).
-    - Экранирует HTML и режет текст на куски ≤4096 символов.
-    - Шлёт в ERROR_LOG_CHANNEL_ID (если задан), иначе первому ID из ID_ADMIN_USER.
-    Возвращает True.
-    """
     if len(args) == 2:
         update, exception = args
     elif len(args) == 1:
@@ -93,6 +120,26 @@ async def global_error_handler(*args: Any) -> bool:
         exception = args[0]
     else:
         return True
+
+    # ── Мягкая ветка: заблокировали бота ──
+    if isinstance(exception, TelegramForbiddenError):
+        uid = _extract_user_id_from_update(update) if update is not None else None
+        try:
+            if uid is not None:
+                await _cleanup_blocked(uid)
+                logging.getLogger(__name__).info(
+                    "user_id=%s – TelegramForbiddenError перехвачен глобально: очистка выполнена",
+                    uid, extra={"user_id": uid}
+                )
+            else:
+                logging.getLogger(__name__).info(
+                    "TelegramForbiddenError перехвачен глобально: user_id неизвестен",
+                    extra={"user_id": "system"}
+                )
+        except Exception:
+            # даже если очистка упала — не эскалируем Forbidden
+            pass
+        return True  # ← гасим ошибку, не шлём репорты
 
     log.exception("Необработанное исключение: %s", exception, exc_info=True)
 

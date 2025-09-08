@@ -8,7 +8,7 @@ from typing import Sequence
 from aiogram.exceptions import TelegramBadRequest
 
 from storage import get_all_invite_links, save_invite_link
-from utils.chatlink import to_int_or_none, is_url, eq_chat_id, parse_exp_aware
+from common.utils.chatlink import to_int_or_none, is_url, eq_chat_id, parse_exp_aware
 
 
 async def generate_invite_links(
