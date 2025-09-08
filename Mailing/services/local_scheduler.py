@@ -1,5 +1,5 @@
 # Mailing/services/local_scheduler.py
-# commit: style(logs): человеко-понятные русские логи без названий функций
+# commit: fix(scheduler): one-off в прошлом → disable(status=expired) без WARNING; cron без изменений
 
 from __future__ import annotations
 
@@ -14,7 +14,12 @@ from aiogram import Bot
 from common.db_api_client import db_api_client
 from common.utils.common import log_and_report
 from common.utils.time_msk import MSK
-from Mailing.services.schedule import parse_and_preview, ScheduleError, is_oneoff_text
+from Mailing.services.schedule import (
+    parse_and_preview,
+    ScheduleError,
+    is_oneoff_text,
+    parse_oneoff_msk,
+)
 from Mailing.services.broadcasts.service import try_send_now
 
 log = logging.getLogger(__name__)
@@ -46,15 +51,44 @@ async def _load_broadcast(bid: int) -> Optional[dict]:
         log.warning("Не удалось загрузить рассылку #%s: %s", bid, e)
         return None
 
+
 def _next_dt_from_text(schedule_text: str) -> Optional[datetime]:
+    """
+    Возвращает ближайший запуск (МСК).
+    - Для корректного one-off в прошлом — тихо возвращает None (НЕ WARNING).
+    - Для некорректной строки — WARNING и None.
+    """
+    schedule_text = (schedule_text or "").strip()
+    if not schedule_text:
+        return None
+
+    # one-off: парсим вручную, без ensure_future(), чтобы не плодить WARN «Время уже прошло».
+    if is_oneoff_text(schedule_text):
+        try:
+            dt = parse_oneoff_msk(schedule_text)
+        except ScheduleError as e:
+            log.warning("Некорректная разовая дата '%s': %s", schedule_text, e)
+            return None
+        return dt if dt > _now_aw() else None
+
+    # cron — как раньше
     try:
-        kind, dates = parse_and_preview(schedule_text, count=1)
+        _kind, dates = parse_and_preview(schedule_text, count=1)
         if not dates:
             return None
         return dates[0]
     except ScheduleError as e:
         log.warning("Некорректное расписание '%s': %s", schedule_text, e)
         return None
+
+
+async def _disable_oneoff(bid: int, schedule_text: str) -> None:
+    try:
+        await db_api_client.update_broadcast(bid, enabled=False)
+        log.info("Разовая рассылка #%s (%s) выключена (enabled=False)", bid, schedule_text)
+    except Exception as e:
+        # чтобы не терять проблему, поднимем уровень
+        log.warning("Не удалось выключить one-off #%s (schedule='%s'): %s", bid, schedule_text, e)
 
 
 # ---------- публичный API ----------
@@ -86,13 +120,24 @@ async def ensure_task_for(bot: Bot, br: dict) -> None:
     schedule_text = (br.get("schedule") or "").strip()
     enabled = bool(br.get("enabled", br.get("is_enabled", True)))
 
+    # выключена или пустое расписание — просто снимем локальную задачу
     if not schedule_text or not enabled:
         if bid in _tasks:
             await cancel(bid)
         return
 
+    is_oneoff = is_oneoff_text(schedule_text)
     next_dt = _next_dt_from_text(schedule_text)
-    if not next_dt:
+
+    # Ключевой фикс: просроченный one-off — тихо выключаем запись и не планируем задачу
+    if is_oneoff and next_dt is None:
+        if bid in _tasks:
+            await cancel(bid)
+        await _disable_oneoff(bid, schedule_text)
+        return
+
+    # Некорректное расписание или cron без ближайшей точки — снять и выйти
+    if next_dt is None:
         if bid in _tasks:
             await cancel(bid)
         return
@@ -122,6 +167,7 @@ async def ensure_task_for(bot: Bot, br: dict) -> None:
                 log.info("Перед запуском параметры рассылки #%s изменились — запуск отменён", bid)
                 return
 
+            # Запускаем рассылку
             try:
                 await db_api_client.send_broadcast_now(bid)
             except Exception as exc:
@@ -131,14 +177,18 @@ async def ensure_task_for(bot: Bot, br: dict) -> None:
             except Exception as exc:
                 log.error("Локальный запуск рассылки #%s не удался: %s", bid, exc)
 
-            if not is_oneoff_text(schedule_text):
+            # После отправки:
+            if is_oneoff:
+                # разовая — выключаем, чтобы не попадала в будущие ресинки
+                await _disable_oneoff(bid, schedule_text)
+                await cancel(bid)
+            else:
+                # cron — перепланируем следующий запуск
                 nxt = _next_dt_from_text(schedule_text)
                 if nxt:
                     await ensure_task_for(bot, dict(id=bid, schedule=schedule_text, enabled=True))
                 else:
                     await cancel(bid)
-            else:
-                await cancel(bid)
 
         except Exception as e:
             log.exception("Ошибка при выполнении задачи для рассылки #%s: %s", bid, e)
@@ -169,6 +219,7 @@ async def refresh_all(bot: Bot) -> None:
         seen.add(bid)
         await ensure_task_for(bot, br)
 
+    # удалим локальные задачи для рассылок, которых больше нет в списке
     for bid in list(_tasks.keys()):
         if bid not in seen:
             await cancel(bid)
