@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import json
+import time
+from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple, Set
 
 import config
@@ -15,22 +17,18 @@ from common.utils.common import log_and_report
 from common.utils.time_msk import now_msk_naive
 
 from Mailing.services.audience import resolve_audience  # резолв аудитории (ids|kind|sql)
-from storage import remove_membership  # <- добавили обёртку для membership
+from storage import remove_membership  # <- обёртка для membership
 from .sender import send_actual
 
 log = logging.getLogger(__name__)
 
-REPORT_BATCH = 200
+# Меньший батч, чтобы чаще фиксировать прогресс
+REPORT_BATCH = 50
 
 
-def _now_msk_iso() -> str:
-    """Текущее время (МСК, naive) 'YYYY-MM-DD HH:MM:SS'."""
+def _now_msk_sql() -> str:
+    """'YYYY-MM-DD HH:MM:SS' (МСК, naive) — безопасно для БД/сериализаторов."""
     return now_msk_naive().strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _now_msk_iso8601() -> str:
-    """Текущее время (МСК, naive) 'YYYY-MM-DDTHH:MM:SS' — безопасный для pydantic формат."""
-    return now_msk_naive().strftime("%Y-%m-%dT%H:%M:%S")
 
 
 def _to_media_items(content: Any) -> List[Dict[str, Any]]:
@@ -38,54 +36,46 @@ def _to_media_items(content: Any) -> List[Dict[str, Any]]:
     Приводим контент к unified-формату для sender.{send_actual,send_preview}.
 
     Поддерживаем:
-    1) Обёрнутый формат: {"media_items": [ ... ]}      ← текущий визард
+    1) Обёрнутый формат: {"media_items": [ ... ]}
     2) Чистый список unified-элементов: [ ... ]
     3) Старый dict-формат: {"text": "...", "files": [ {type,file_id}, ... ]}
     4) Старый CSV в dict: {"text":"...", "files":"id1,id2,..."}
     5) Контент строкой JSON (dict или list в виде строки)
        + если строка не JSON, пытаемся трактовать как CSV file_id.
     """
-    # --- (5) Если пришла строка — пробуем распарсить как JSON ---
     if isinstance(content, str):
         s = content.strip()
         if s:
             try:
                 content = json.loads(s)
             except Exception:
-                # Не JSON: трактуем как CSV file_id
                 ids = [p.strip() for p in s.split(",") if p.strip()]
                 if len(ids) > 1:
                     album_items = [{"type": "photo", "payload": {"file_id": fid}} for fid in ids[:10]]
-                    items = [{"type": "album", "payload": {"items": album_items}}]
-                    return items
+                    return [{"type": "album", "payload": {"items": album_items}}]
                 if len(ids) == 1:
                     return [{"type": "media", "payload": {"kind": "photo", "file_id": ids[0]}}]
                 return []
         else:
             return []
 
-    # --- (1) Обёртка {"media_items":[...]} ---
     if isinstance(content, dict) and isinstance(content.get("media_items"), list):
         return content["media_items"]
 
-    # --- (2) Уже список unified-элементов ---
     if isinstance(content, list):
         return content
 
-    # --- (3,4) Старые форматы: словарь с text/files ---
     if not isinstance(content, dict):
         return []
 
     text = (content.get("text") or "").strip()
     files_any = content.get("files")
-
     items: List[Dict[str, Any]] = []
 
-    # --- (4) CSV-строка в поле files ---
     if isinstance(files_any, str):
         ids = [s.strip() for s in files_any.split(",") if s.strip()]
         if len(ids) > 1:
-            album_items = [{"type": "photo", "payload": {"file_id": fid}} for fid in ids[:10]]  # TG лимит 10
+            album_items = [{"type": "photo", "payload": {"file_id": fid}} for fid in ids[:10]]
             items.append({"type": "album", "payload": {"items": album_items}})
             if text:
                 items.append({"type": "text", "payload": {"text": text}})
@@ -98,14 +88,12 @@ def _to_media_items(content: Any) -> List[Dict[str, Any]]:
             return items
         files_any = []
 
-    # --- (3) Список словарей файлов ---
     files = files_any or []
     files = files if isinstance(files, list) else []
 
-    # Альбом
     if len(files) > 1:
         album_items: List[Dict[str, Any]] = []
-        for f in files[:10]:  # TG лимит 10
+        for f in files[:10]:
             ftype = (f.get("type") or "photo").lower()
             fid = f.get("file_id")
             if not fid:
@@ -117,7 +105,6 @@ def _to_media_items(content: Any) -> List[Dict[str, Any]]:
                 items.append({"type": "text", "payload": {"text": text}})
         return items
 
-    # Одиночное медиа
     if len(files) == 1:
         f = files[0]
         ftype = (f.get("type") or "photo").lower()
@@ -131,7 +118,6 @@ def _to_media_items(content: Any) -> List[Dict[str, Any]]:
             items.append({"type": "media", "payload": payload})
             return items
 
-    # Только текст
     if text:
         items.append({"type": "text", "payload": {"text": text}})
     return items
@@ -160,14 +146,14 @@ async def _try_materialize(broadcast_id: int, user_ids: List[int]) -> None:
 
 def _build_report_items_strict(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Готовим список для API:
+    Формат для API:
       {"items":[{"user_id": int, "status": "sent|failed|skipped|pending",
-                 "attempt_inc": 1, "sent_at": "YYYY-MM-DDTHH:MM:SS",
+                 "attempt_inc": 1, "sent_at": "YYYY-MM-DD HH:MM:SS",
                  "message_id"?: int, "error_code"?: str, "error_message"?: str}]}
     None-поля не отправляем.
     """
     out: List[Dict[str, Any]] = []
-    ts = _now_msk_iso8601()
+    ts = _now_msk_sql()
     for it in items or []:
         try:
             uid = int(it.get("user_id"))
@@ -196,15 +182,21 @@ def _build_report_items_strict(items: List[Dict[str, Any]]) -> List[Dict[str, An
 
 
 async def _try_report(broadcast_id: int, items: List[Dict[str, Any]]) -> None:
-    """Батч-репорт результатов доставки в ожидаемом сервисом формате."""
+    """Батч-репорт результатов доставки."""
     if not items:
         return
     payload_items = _build_report_items_strict(items)
     if not payload_items:
         return
     try:
-        await db_api_client.deliveries_report(broadcast_id, items=payload_items)
-        log.debug("report %s: ok, sent %s items", broadcast_id, len(payload_items))
+        res = await db_api_client.deliveries_report(broadcast_id, items=payload_items)
+        # чтобы было видно в обычных логах
+        log.info("report %s: ok, sent %s items", broadcast_id, len(payload_items))
+        if res:
+            # не у всех бекендов есть тело; если есть — логируем компактно
+            total = res.get("updated") or res.get("count") or None
+            if total is not None:
+                log.info("report %s: backend updated=%s", broadcast_id, total)
     except AttributeError:
         log.debug("deliveries_report отсутствует в db_api_client — пропускаю")
     except Exception as e:
@@ -214,10 +206,6 @@ async def _try_report(broadcast_id: int, items: List[Dict[str, Any]]) -> None:
 # ---- AUTO-CLEANUP FOR BLOCKED USERS ----
 
 def _is_blocked_error(err_code: Optional[str], err_msg: Optional[str]) -> bool:
-    """
-    Эвристика определения блокировки бота пользователем.
-    Ориентируемся на текст Telegram API: 'Forbidden: bot was blocked by the user'.
-    """
     s1 = (err_code or "").lower()
     s2 = (err_msg or "").lower()
     if "forbidden" in s1 and "blocked" in s1:
@@ -226,10 +214,7 @@ def _is_blocked_error(err_code: Optional[str], err_msg: Optional[str]) -> bool:
 
 
 async def _cleanup_after_block(user_id: int) -> None:
-    """
-    Удаляем: membership только по BOT_ID и запись в user_subscriptions.
-    Лог — одно INFO-сообщение.
-    """
+    """Удаляем membership только по BOT_ID и запись в user_subscriptions."""
     # 1) membership (только бот)
     try:
         await remove_membership(user_id, config.BOT_ID)
@@ -246,31 +231,63 @@ async def _cleanup_after_block(user_id: int) -> None:
         s_ok = False
         log.error("user_id=%s – Ошибка delete_user_subscriptions: %s", user_id, exc, extra={"user_id": user_id})
 
-    # Единый INFO — что получилось
-    parts: List[str] = []
-    parts.append("membership(bot)=OK" if m_ok else "membership(bot)=ERR")
-    parts.append("subscriptions=OK" if s_ok else "subscriptions=ERR")
     log.info(
-        "user_id=%s – Автоочистка после Forbidden: %s",
-        user_id, ", ".join(parts),
-        extra={"user_id": user_id}
+        "user_id=%s – Автоочистка после Forbidden: %s, %s",
+        user_id,
+        "membership(bot)=OK" if m_ok else "membership(bot)=ERR",
+        "subscriptions=OK" if s_ok else "subscriptions=ERR",
+        extra={"user_id": user_id},
     )
+
+
+async def _notify_admins_about_broadcast(
+    bot: Bot,
+    *,
+    b: dict,
+    total: int,
+    sent: int,
+    failed: int,
+    started_ts: float,
+    errors_counter: Counter,
+) -> None:
+    admins = getattr(config, "ID_ADMIN_USER", set()) or set()
+    if not admins:
+        return
+    dur = max(0.0, time.time() - started_ts)
+    title = (b.get("title") or "").strip() or "Без названия"
+    bid = b.get("id")
+
+    parts = [
+        f"📨 <b>Рассылка #{bid}</b>",
+        f"Название: <i>{title}</i>",
+        f"Аудитория: <b>{total}</b>",
+        f"Отправлено: <b>{sent}</b>",
+        f"Ошибок: <b>{failed}</b>",
+        f"Длительность: <code>{dur:.1f}с</code>",
+    ]
+
+    if errors_counter:
+        top = ", ".join(f"{k or 'Unknown'}={v}" for k, v in errors_counter.most_common(5))
+        parts.append(f"Ошибки (топ): {top}")
+
+    text = "\n".join(parts)
+    for uid in admins:
+        try:
+            await bot.send_message(uid, text, disable_web_page_preview=True)
+        except Exception as e:
+            log.warning("admin notify failed user_id=%s: %s", uid, e)
 
 
 async def send_broadcast(bot: Bot, broadcast: dict, throttle_per_sec: Optional[int] = None) -> Tuple[int, int]:
     """
     Основная отправка: читает broadcast['content'], резолвит аудиторию и шлёт каждому.
     Возвращает (sent, failed).
-
-    Новое: если sent=0 и failed>0, но все ошибки — "bot was blocked by the user",
-    то пишем INFO и не зовём log_and_report (чтобы не спамить ошибками).
     """
     bid = broadcast["id"]
     rate = throttle_per_sec or getattr(config, "BROADCAST_RATE_PER_SEC", 29)
     rate = max(1, int(rate))
     window = 1.0 / rate
 
-    # 1) Контент
     raw_content = broadcast.get("content")
     media_items = _to_media_items(raw_content)
     if not media_items:
@@ -294,62 +311,74 @@ async def send_broadcast(bot: Bot, broadcast: dict, throttle_per_sec: Optional[i
 
     log.info("Начинаю рассылку id=%s: аудитория=%s, скорость=%s msg/с", bid, len(audience), rate)
 
-    # 4) Цикл отправки + батч-репорт
     sent = 0
     failed = 0
     report_buf: List[Dict[str, Any]] = []
 
     cleaned_blocked: Set[int] = set()
-    blocked_failed_count = 0  # ← считаем, сколько фейлов — это именно 'bot was blocked by the user'
+    blocked_failed_count = 0
+    errors_counter: Counter = Counter()
+    started_ts = time.time()
 
-    for uid in audience:
-        ok, msg_id, err_code, err_msg = await send_actual(bot, uid, media_items, kb_for_text=None)
-        if ok:
-            sent += 1
-            report_buf.append({
-                "user_id": uid,
-                "status": "sent",
-                "message_id": msg_id,
-            })
-            log.debug("Сообщение отправлено пользователю %s (broadcast=%s)", uid, bid)
-        else:
-            failed += 1
-            report_buf.append({
-                "user_id": uid,
-                "status": "failed",
-                "message_id": msg_id,
-                "error_code": err_code,
-                "error_message": (err_msg[:1000] if err_msg else None),
-            })
-
-            # Автоочистка на Forbidden (bot blocked)
-            if uid not in cleaned_blocked and _is_blocked_error(err_code, err_msg):
-                await _cleanup_after_block(uid)
-                cleaned_blocked.add(uid)
-                blocked_failed_count += 1
-
-            log.debug("Ошибка при отправке пользователю %s (broadcast=%s): %s", uid, bid, err_code or "Unknown")
-
-        if len(report_buf) >= REPORT_BATCH:
+    async def _flush():
+        nonlocal report_buf
+        if report_buf:
             await _try_report(bid, report_buf)
             report_buf.clear()
 
-        await asyncio.sleep(window)
+    # 4) Цикл отправки + периодический репорт
+    try:
+        for uid in audience:
+            ok, msg_id, err_code, err_msg = await send_actual(bot, uid, media_items, kb_for_text=None)
+            if ok:
+                sent += 1
+                report_buf.append({"user_id": uid, "status": "sent", "message_id": msg_id})
+            else:
+                failed += 1
+                errors_counter.update([err_code or "Unknown"])
+                report_buf.append({
+                    "user_id": uid,
+                    "status": "failed",
+                    "message_id": msg_id,
+                    "error_code": err_code,
+                    "error_message": (err_msg[:1000] if err_msg else None),
+                })
 
-    # добросим хвост
-    if report_buf:
-        await _try_report(bid, report_buf)
+                # Автоочистка на Forbidden (bot blocked)
+                if uid not in cleaned_blocked and _is_blocked_error(err_code, err_msg):
+                    await _cleanup_after_block(uid)
+                    cleaned_blocked.add(uid)
+                    blocked_failed_count += 1
 
-    # 5) Итог — без шума, если все ошибки = blocked
+            if len(report_buf) >= REPORT_BATCH:
+                await _flush()
+
+            await asyncio.sleep(window)
+    finally:
+        # добросим хвост при любом исходе
+        await _flush()
+        # уведомление админам — по факту завершения цикла/ошибки
+        try:
+            await _notify_admins_about_broadcast(
+                bot,
+                b=broadcast,
+                total=len(audience),
+                sent=sent,
+                failed=failed,
+                started_ts=started_ts,
+                errors_counter=errors_counter,
+            )
+        except Exception as e:
+            log.warning("notify admins failed for broadcast %s: %s", bid, e)
+
+    # 5) Итоговые логи
     if sent == 0 and failed > 0:
         if blocked_failed_count == failed:
-            # Все получатели заблокировали бота: считаем кейс штатным, без ошибок
             log.info(
                 "Рассылка id=%s: аудитория недоступна (все адресаты заблокировали бота). "
                 "Ошибок не создаём, автоочистка выполнена.", bid
             )
         else:
-            # Реальный фейл: ни одного отправленного, и не все причины = blocked
             log.error("Рассылка id=%s не доставлена никому (ошибок=%s)", bid, failed)
             try:
                 await log_and_report(Exception("broadcast failed"), f"Рассылка {bid} не доставлена: ошибок={failed}")
@@ -370,9 +399,9 @@ async def mark_broadcast_sent(broadcast_id: int) -> dict:
 
 async def try_send_now(bot: Bot, broadcast_id: int) -> None:
     """
-    Немедленный запуск рассылки БЕЗ учёта статуса и времени:
-      1) выставляем статус 'sending'
-      2) вызываем send_broadcast(...)
+    Немедленный запуск:
+      1) статус 'sending'
+      2) send_broadcast(...)
       3) если что-то отправили — 'sent', иначе 'failed'
     """
     try:
