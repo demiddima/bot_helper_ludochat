@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+from httpx import HTTPStatusError
 from common.db_api_client import db_api_client
 from common.utils.common import log_and_report  # отправка в ERROR_LOG_CHANNEL_ID
 
@@ -17,7 +18,7 @@ DEFAULT_SUBS = {
 async def ensure_user_subscriptions_defaults(user_id: int) -> None:
     """
     Идемпотентная инициализация подписок пользователя дефолтами.
-    Любые ошибки логируем и не пробрасываем — первый запуск не должен падать.
+    На 422 (нет user в БД) — не ругаемся: welcome-флоу может опережать апсёрт user.
     """
     try:
         await db_api_client.put_user_subscriptions(
@@ -34,14 +35,21 @@ async def ensure_user_subscriptions_defaults(user_id: int) -> None:
             DEFAULT_SUBS["important_enabled"],
             extra={"user_id": user_id},
         )
+    except HTTPStatusError as exc:
+        if exc.response is not None and exc.response.status_code == 422:
+            # Пользователь ещё не создан на бэке — ок, попробуем позже/в другом флоу
+            logging.info("Пропускаем init подписок: user_id=%s (422: нет user)", user_id, extra={"user_id": user_id})
+            return
+        logging.error("Не удалось инициализировать подписки: user_id=%s, HTTP %s",
+                      user_id, exc.response.status_code if exc.response else "???",
+                      extra={"user_id": user_id})
+        try:
+            await log_and_report(exc, f"инициализация подписок, user_id={user_id}")
+        except Exception:
+            pass
     except Exception as exc:
-        logging.error(
-            "Не удалось инициализировать подписки: user_id=%s, ошибка=%s",
-            user_id,
-            exc,
-            extra={"user_id": user_id},
-        )
-        # Сообщаем в лог-канал, но не валим поток
+        logging.error("Не удалось инициализировать подписки: user_id=%s, ошибка=%s",
+                      user_id, exc, extra={"user_id": user_id})
         try:
             await log_and_report(exc, f"инициализация подписок, user_id={user_id}")
         except Exception:

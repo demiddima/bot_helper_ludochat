@@ -12,6 +12,12 @@ class MembershipsMixin(BaseApi):
     async def add_membership(self, user_id: int, chat_id: int) -> None:
         try:
             r = await self.client.post("/memberships/", params={"user_id": user_id, "chat_id": chat_id})
+            if r.status_code == 422:
+                log.info(
+                    "Подписка: 422 (FK) — user_id=%s, chat_id=%s — отложим без ошибок",
+                    user_id, chat_id, extra={"user_id": user_id}
+                )
+                return
             r.raise_for_status()
         except Exception as e:
             log.error(

@@ -1,3 +1,4 @@
+# config.py
 import os
 import sys
 from dotenv import load_dotenv
@@ -15,6 +16,38 @@ def get_env_int(key):
         return int(val)
     except ValueError:
         raise ValueError(f"Environment variable {key} must be an integer, got: {val}")
+
+
+def get_env_int_choice(key: str, default: int, choices: set[int]) -> int:
+    """
+    Гибкое чтение числового режима из .env:
+    - пробуем привести к int;
+    - поддерживаем строки true/false → 1/0 для обратной совместимости;
+    - если невалидно или не из допустимых значений — логируем warning и возвращаем default.
+    """
+    raw = os.getenv(key, None)
+    if raw is None:
+        logging.info(f"{key} is not set; using default {default}")
+        return default
+
+    s = str(raw).strip().lower()
+    # Поддержка булевых значений в .env (историческая совместимость)
+    if s in {"true", "yes", "on"}:
+        val = 1
+    elif s in {"false", "no", "off"}:
+        val = 0
+    else:
+        try:
+            val = int(s)
+        except ValueError:
+            logging.warning(f"{key} has invalid value '{raw}', falling back to {default}")
+            return default
+
+    if val not in choices:
+        logging.warning(f"{key}={val} is not in allowed {sorted(choices)}; falling back to {default}")
+        return default
+
+    return val
 
 
 try:
@@ -84,8 +117,11 @@ try:
     if not API_KEY_VALUE:
         raise KeyError("API_KEY_VALUE is not set")
 
-    # Флаг приветственного сообщения
-    SHOW_WELCOME = bool(int(os.getenv("SHOW_WELCOME", 1)))
+    # Флаг/режим приветственного сообщения:
+    # 0 — без приветствия, сразу основное сообщение
+    # 1 — интерактивное приветствие с кнопкой подтверждения
+    # 2 — приветствие БЕЗ кнопок, затем авто-подтверждение и основное сообщение
+    SHOW_WELCOME = get_env_int_choice("SHOW_WELCOME", default=1, choices={0, 1, 2})
 
     # BOT_ID (инициализация)
     BOT_ID = None

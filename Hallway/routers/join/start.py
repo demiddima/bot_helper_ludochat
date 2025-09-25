@@ -1,5 +1,6 @@
 # start.py
 # Этап 3: инициализация дефолтов подписок (OFF/ON/ON) после add_user_and_membership.
+# Режим SHOW_WELCOME=2: шлём приветствие БЕЗ кнопок и сразу основное сообщение (как при SHOW_WELCOME=0), с авто-подтверждением.
 
 import time
 import logging
@@ -18,11 +19,11 @@ from Hallway.routers.join import membership as membership
 from Hallway.routers.join.resources import send_resources_message, send_chunked_message
 from messages import get_welcome_text
 
-
 # ⬇️ Импортируем из services/subscriptions
 from Hallway.services.subscriptions import ensure_user_subscriptions_defaults
 
 router = Router()
+
 
 @router.message(F.chat.type == "private", F.text.startswith("/start"))
 async def process_start(message: Message):
@@ -30,6 +31,13 @@ async def process_start(message: Message):
     uid = message.from_user.id
     parts = message.text.split()
     bot_username = (await bot.get_me()).username or ""
+
+    # Нормализуем режим приветствия к int: 0|1|2
+    try:
+        welcome_mode = int(getattr(config, "SHOW_WELCOME", 1))
+    except Exception:
+        # На случай, если SHOW_WELCOME придёт как bool/str
+        welcome_mode = 1 if getattr(config, "SHOW_WELCOME", True) else 0
 
     async def _safe_track(key: str):
         try:
@@ -40,7 +48,7 @@ async def process_start(message: Message):
                 extra={"user_id": uid}
             )
 
-    # 1) Регистрируем пользователя и membership в BOT_ID
+    # 1) Регистрируем пользователя и membership в BOT_ID (идемпотентно)
     try:
         await membership.add_user_and_membership(message.from_user, config.BOT_ID)
         # 2) Дефолты подписок OFF/ON/ON (идемпотентно)
@@ -57,8 +65,8 @@ async def process_start(message: Message):
             extra={"user_id": uid}
         )
 
-    # 3) Если SHOW_WELCOME=0 — сразу принимаем условия и шлём ресурсы
-    if not getattr(config, "SHOW_WELCOME", True):
+    # 3) SHOW_WELCOME=0 — без приветствия: авто-подтверждение и сразу ресурсы (как было)
+    if welcome_mode == 0:
         try:
             await set_user_accepted(uid)
             logging.info(
@@ -74,13 +82,54 @@ async def process_start(message: Message):
             asyncio.create_task(_safe_track(parts[1]))
         return await send_resources_message(bot, message.from_user, uid)
 
-    # 4) Если уже приняли условия — сразу ресурсы
+    # 3a) SHOW_WELCOME=2 — отправляем приветственный текст БЕЗ кнопок, затем авто-подтверждение и сразу ресурсы
+    if welcome_mode == 2:
+        # Приветствие — чистый текст, без клавиатуры и ожиданий
+        try:
+            await send_chunked_message(
+                uid,
+                get_welcome_text(),
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                reply_markup=None,  # ключевое: никаких инлайн-кнопок «подтвердить»
+            )
+            logging.info(
+                f"user_id={uid} – Приветствие отправлено (SHOW_WELCOME=2, без кнопок)",
+                extra={"user_id": uid}
+            )
+        except Exception as exc:
+            logging.error(
+                f"user_id={uid} – Ошибка отправки приветствия (SHOW_WELCOME=2): {exc}",
+                extra={"user_id": uid}
+            )
+
+        # Авто-подтверждение условий (аналог ветки verify_/SHOW_WELCOME=0)
+        try:
+            await set_user_accepted(uid)
+            logging.info(
+                f"user_id={uid} – Условие принято автоматически (SHOW_WELCOME=2)",
+                extra={"user_id": uid}
+            )
+        except Exception as exc:
+            logging.exception(
+                f"user_id={uid} – Ошибка при auto set_terms_accepted (SHOW_WELCOME=2): {exc}",
+                extra={"user_id": uid}
+            )
+
+        # Трекинг старт-параметра, если он есть и это не служебные «start/verify_»
+        if len(parts) == 2 and parts[1] not in ("start",) and not parts[1].startswith("verify_"):
+            asyncio.create_task(_safe_track(parts[1]))
+
+        # Основное сообщение (ресурсы/кнопки)
+        return await send_resources_message(bot, message.from_user, uid)
+
+    # 4) SHOW_WELCOME=1 и пользователь уже принял ранее — сразу ресурсы (как было)
     if await has_user_accepted(uid):
         if len(parts) == 2 and parts[1] not in ("start",) and not parts[1].startswith("verify_"):
             asyncio.create_task(_safe_track(parts[1]))
         return await send_resources_message(bot, message.from_user, uid)
 
-    # 5) Обработка verify_ подтверждения
+    # 5) Обработка verify_ подтверждения (как было)
     if len(parts) == 2 and parts[1].startswith("verify_"):
         try:
             orig = int(parts[1].split("_", 1)[1])
@@ -116,7 +165,7 @@ async def process_start(message: Message):
             )
         return await send_resources_message(bot, message.from_user, orig)
 
-    # 6) Первый /start – показываем приветствие с подтверждением
+    # 6) Первый /start при SHOW_WELCOME=1 – показываем приветствие с кнопкой подтверждения (как было)
     join_requests[uid] = time.time()
     confirm_link = f"https://t.me/{bot_username}?start=verify_{uid}"
     kb = InlineKeyboardMarkup(inline_keyboard=[[

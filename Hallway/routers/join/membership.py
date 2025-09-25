@@ -126,67 +126,104 @@ async def on_chat_member(update: ChatMemberUpdated):
 
 @router.my_chat_member()
 async def on_my_chat_member(update: ChatMemberUpdated):
-    """Фиксируем изменения статуса бота и приватные подписки пользователей."""
+    """
+    Фиксируем изменения статуса бота и приватные подписки пользователей.
+    ВАЖНО: в приватном чате (user <-> бот) сначала апсертим пользователя, потом membership.
+    """
     chat = update.chat
     status = update.new_chat_member.status
 
     # приватные чаты = пользователь ↔ бот
     if chat.type == "private":
         user_id = chat.id
+        # Попробуем взять имя/ник из объекта, если есть
+        subject = (update.new_chat_member.user
+                   if getattr(update, "new_chat_member", None) and getattr(update.new_chat_member, "user", None)
+                   else update.from_user)
+        username = getattr(subject, "username", None)
+        full_name = getattr(subject, "full_name", None)
+
         if status in ("member", "creator", "administrator"):
-            # подписываем на бота и восстанавливаем дефолтные подписки
+            # 1) пользователь (идемпотентно)
+            try:
+                await add_user(user_id, username or None, (full_name or "").strip() or None)
+                logging.info(
+                    f"user_id={user_id} – Пользователь сохранён (username={username}, full_name={full_name})",
+                    extra={"user_id": user_id}
+                )
+            except Exception as exc:
+                logging.error(f"user_id={user_id} – Ошибка при сохранении пользователя: {exc}", extra={"user_id": user_id})
+                await log_and_report(exc, f"add_user user={user_id}")
+
+            # 2) membership: user -> BOT_ID (мягко игнорируем 422)
             try:
                 await add_membership(user_id, config.BOT_ID)
+                logging.info(
+                    f"user_id={user_id} – Подписался на бота (chat={config.BOT_ID})",
+                    extra={"user_id": user_id}
+                )
+            except HTTPStatusError as exc:
+                if exc.response is not None and exc.response.status_code == 422:
+                    # user/chat ещё не зафиксированы на бэке: это нормально, повторится другим флоу
+                    logging.info(
+                        f"user_id={user_id} – 422 на add_membership(bot), отложено",
+                        extra={"user_id": user_id}
+                    )
+                else:
+                    logging.error(
+                        f"user_id={user_id} – HTTP {getattr(exc.response,'status_code', '???')} при добавлении подписки на бота",
+                        extra={"user_id": user_id}
+                    )
+                    await log_and_report(exc, f"add_membership(user={user_id}, chat={config.BOT_ID})")
+            except Exception as exc:
+                logging.error(
+                    f"user_id={user_id} – Ошибка при добавлении подписки на бота: {exc}",
+                    extra={"user_id": user_id}
+                )
+                await log_and_report(exc, f"add_membership(user={user_id}, chat={config.BOT_ID})")
+
+            # 3) дефолтные подписки (OFF/ON/ON); если 422 — не красим
+            try:
                 await ensure_user_subscriptions_defaults(user_id)
                 logging.info(
                     f"user_id={user_id} – Подписался на бота; дефолтные подписки восстановлены",
                     extra={"user_id": user_id}
                 )
-            except Exception as exc:
-                logging.error(f"user_id={user_id} – Ошибка подписки/восстановления дефолтов: {exc}", extra={"user_id": user_id})
-                await log_and_report(exc, f"add_membership+ensure_defaults bot user={user_id}")
-        elif status in ("left", "kicked"):
-            # единый INFO-лог после двух шагов
-            m_ok = True
-            s_ok = True
-            try:
-                await remove_membership(user_id, config.BOT_ID)
-            except Exception as exc:
-                m_ok = False
-                logging.error(f"user_id={user_id} – Ошибка отписки от бота: {exc}", extra={"user_id": user_id})
-                await log_and_report(exc, f"remove_membership bot user={user_id}")
-
-            try:
-                await delete_user_subscriptions(user_id)
             except HTTPStatusError as exc:
-                # например, если записи уже нет — warning, но INFO будет единый
-                s_ok = False
-                logging.warning(
-                    f"user_id={user_id} – HTTP {exc.response.status_code} при удалении подписок",
+                if exc.response is not None and exc.response.status_code == 422:
+                    logging.info(
+                        f"user_id={user_id} – 422 на init подписок, отложено",
+                        extra={"user_id": user_id}
+                    )
+                else:
+                    logging.error(
+                        f"user_id={user_id} – Ошибка инициализации подписок: HTTP {getattr(exc.response,'status_code','???')}",
+                        extra={"user_id": user_id}
+                    )
+                    await log_and_report(exc, f"ensure_user_subscriptions_defaults({user_id})")
+            except Exception as exc:
+                logging.error(
+                    f"user_id={user_id} – Ошибка инициализации подписок: {exc}",
                     extra={"user_id": user_id}
                 )
-                await log_and_report(exc, f"DELETE /subscriptions/{user_id}")
+                await log_and_report(exc, f"ensure_user_subscriptions_defaults({user_id})")
+
+        elif status in ("left", "kicked"):
+            # отписка от бота
+            try:
+                await remove_membership(user_id, config.BOT_ID)
+                logging.info(
+                    f"user_id={user_id} – Отписан от бота (chat={config.BOT_ID})",
+                    extra={"user_id": user_id}
+                )
             except Exception as exc:
-                s_ok = False
-                logging.error(f"user_id={user_id} – Ошибка удаления подписок: {exc}", extra={"user_id": user_id})
-                await log_and_report(exc, f"DELETE /subscriptions/{user_id}")
+                logging.error(f"user_id={user_id} – Ошибка remove_membership: {exc}", extra={"user_id": user_id})
+                await log_and_report(exc, f"remove_membership user={user_id}, chat={config.BOT_ID}")
+        return  # приватный кейс полностью обработан
 
-            parts = []
-            parts.append("membership(bot)=OK" if m_ok else "membership(bot)=ERR")
-            parts.append("subscriptions=OK" if s_ok else "subscriptions=ERR")
-            logging.info(
-                f"user_id={user_id} – Автоочистка после отписки: {', '.join(parts)}",
-                extra={"user_id": user_id}
-            )
-        return
-
-    # группы/каналы – статус бота
+    # групповые/супергруппы: прежняя логика (upsert чата + подписка бота)
     chat_id = chat.id
-    if chat_id not in tracked_chats:
-        return
-
-    logging.info(f"user_id={config.BOT_ID} – bot status='{status}' в chat={chat_id}", extra={"user_id": config.BOT_ID})
-    if status == "member":
+    if status in ("administrator", "member", "creator"):
         try:
             await upsert_chat({
                 "id": chat_id,
